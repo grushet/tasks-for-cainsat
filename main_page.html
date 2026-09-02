@@ -3,8 +3,8 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <meta name="description" content="Task Planner — cain" />
-    <title>Tasks — cain</title>
+    <meta name="description" content="Task planner for cain" />
+    <title>cain Tasks</title>
     <!-- FOUC prevention: apply dark class before paint -->
     <script>try{if(localStorage.getItem('theme')==='dark')document.documentElement.classList.add('dark')}catch(e){}</script>
     <!-- Fonts -->
@@ -160,16 +160,10 @@
     </style>
 </head>
 <body>
-    <section class="welcome">
-        <header><h1>Task Planner</h1></header>
-        <main><p>Welcome to Task Planner!</p></main>
-    </section>
-
     <div class="app">
         <aside class="sidebar" aria-label="Main navigation">
-            <!-- Logo -->
+            <!-- Logo. There is no logo.png in this repo; the wordmark is the logo. -->
             <div class="sidebar-logo">
-                <img src="logo.png" alt="cain" onerror="this.style.display='none'">
                 <span class="sidebar-logo-text">cain</span>
             </div>
 
@@ -260,6 +254,12 @@
 
         <section class="content">
 
+            <!-- Shown when loading or saving fails, so a dropped save is never silent. -->
+            <div id="sync-banner" class="sync-banner" hidden role="status" aria-live="polite">
+                <span id="sync-banner-text"></span>
+                <button type="button" id="sync-banner-retry" class="sync-banner-retry">Retry</button>
+            </div>
+
             <!-- Delete Confirmation Modal -->
             <div id="delete-confirm-modal" class="delete-confirm-modal hidden">
                 <div class="delete-confirm-content">
@@ -284,7 +284,11 @@
             <section id="page-tasks" class="page">
                 <h2>Tasks</h2>
                 <div class="task-entry">
-                    <input id="new-task-input" class="task-input" type="text" placeholder="Type a new task..." aria-label="New task input">
+                    <input id="new-task-input" class="task-input" type="text" placeholder="Type a new task, then press Enter" aria-label="New task input" aria-describedby="task-input-hint">
+                    <p class="task-input-hint" id="task-input-hint">
+                        Tip: end with <code>!today</code>, <code>!tomorrow</code>, <code>!nextweek</code>
+                        or a weekday like <code>!friday</code> to set the due date.
+                    </p>
                 </div>
                 <div class="task-controls">
                     <div class="task-control-group">
@@ -339,8 +343,8 @@
             <section id="page-sat" class="page">
                 <h2>SAT Helper</h2>
                 <div class="sat-placeholder">
-                    <p>The SAT Helper helps you study and excel on the SAT. Go try it out!</p>
-                    <a class="cta-sat-button" href="https://cainsat.org" target="_blank" rel="noopener">Open cain SAT</a>
+                    <p>Lessons, practice sets and full timed tests live on the main cain site. You are already signed in there with this same account.</p>
+                    <a class="cta-sat-button" href="https://cainsat.org/dashboard" target="_blank" rel="noopener">Open cain SAT</a>
                 </div>
             </section>
         </section>
@@ -349,45 +353,23 @@
     <script type="module" src="main.js" defer></script>
 
     <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js";
-    import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-auth.js";
-    import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js";
+    import { getSession, loadPlanner, signOutUrl } from './api.js';
 
-    const firebaseConfig = {
-        apiKey: "AIzaSyCN8wH8WMmXtFSN8yFAVrizTS7IqLQzWKg",
-        authDomain: "steazyplanner.firebaseapp.com",
-        projectId: "steazyplanner",
-        storageBucket: "steazyplanner.firebasestorage.app",
-        messagingSenderId: "231639329077",
-        appId: "1:231639329077:web:4242cb4d5f9ff81b9fc47c",
-        measurementId: "G-7GWFDHKKER"
-    };
-
-    const app = initializeApp(firebaseConfig);
-    const auth = getAuth(app);
-    export const db = getFirestore(app);
-
-    window.db = db;
-    window.currentUserUid = null;
-
-    onAuthStateChanged(auth, async (user) => {
-        if (!user) {
-            window.location.replace('/index.html');
-        } else {
-            window.currentUserUid = user.uid;
-            const docRef = doc(db, "users", user.uid);
-            const docSnap = await getDoc(docRef);
-            if (docSnap.exists()) {
-                const userData = docSnap.data();
-                const event = new CustomEvent('userDataLoaded', { detail: userData });
-                window.dispatchEvent(event);
-            }
-        }
-    });
+    /**
+     * Fetching starts immediately, but main.js only registers its listener once
+     * the DOM is ready. The old build raced exactly here and lost the pomodoro:
+     * it read the loaded data out of a global that had not been filled yet.
+     * The result is parked on window as well as announced, so whichever side
+     * arrives second still sees it.
+     */
+    window.plannerData = null;
+    window.plannerUser = null;
 
     document.getElementById('logout-btn').addEventListener('click', (e) => {
         e.preventDefault();
-        signOut(auth);
+        // Top-level navigation: NextAuth's sign-out is not reachable by fetch
+        // from this origin. It returns here, which then bounces to the login page.
+        window.location.href = signOutUrl(location.href);
     });
 
     // Theme toggle
@@ -395,6 +377,33 @@
         const isDark = document.documentElement.classList.toggle('dark');
         try { localStorage.setItem('theme', isDark ? 'dark' : 'light'); } catch(e) {}
     });
+
+    function toLogin() {
+        try { sessionStorage.setItem('postLoginRedirect', location.href); } catch (e) {}
+        window.location.replace('/index.html');
+    }
+
+    try {
+        const user = await getSession();
+        if (!user) {
+            toLogin();
+        } else {
+            window.plannerUser = user;
+            const data = await loadPlanner();
+            window.plannerData = data;
+            window.dispatchEvent(new CustomEvent('plannerDataLoaded', { detail: data }));
+        }
+    } catch (err) {
+        if (err && err.unauthorized) {
+            toLogin();
+        } else {
+            // Reaching the network failed rather than the session being absent.
+            // Signing the student out here would look like data loss, so the
+            // app stays put and says what happened.
+            console.error('Could not load planner data:', err);
+            window.dispatchEvent(new CustomEvent('plannerLoadFailed', { detail: err }));
+        }
+    }
     </script>
 
 </body>

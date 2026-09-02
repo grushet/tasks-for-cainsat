@@ -3,7 +3,8 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>cain — Sign In</title>
+    <title>cain Tasks</title>
+    <meta name="description" content="Task planner for cain" />
     <script>try{if(localStorage.getItem('theme')==='dark')document.documentElement.classList.add('dark')}catch(e){}</script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -19,7 +20,6 @@
             --accent: #6366f1;
             --accent-hover: #4f46e5;
             --accent-text: #ffffff;
-            --input-bg: #f1f5f9;
             --error: #e53e3e;
         }
         html.dark {
@@ -28,7 +28,6 @@
             --border: #2d3148;
             --text: #e2e8f0;
             --text-muted: #718096;
-            --input-bg: #13151f;
         }
         body {
             font-family: 'Outfit', system-ui, sans-serif;
@@ -38,6 +37,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
+            padding: 24px;
         }
         .card {
             background: var(--bg-card);
@@ -47,125 +47,109 @@
             width: 100%;
             max-width: 380px;
             box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+            text-align: center;
         }
+        html.dark .card { box-shadow: 0 4px 28px rgba(0,0,0,0.45); }
         h1 { font-size: 1.7rem; font-weight: 800; margin-bottom: 6px; }
-        .subtitle { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 28px; }
-        label { display: block; font-size: 0.82rem; font-weight: 600; margin-bottom: 6px; color: var(--text-muted); }
-        input[type="email"],
-        input[type="password"] {
-            width: 100%;
-            background: var(--input-bg);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 10px 12px;
-            font-size: 0.95rem;
-            color: var(--text);
-            font-family: inherit;
-            margin-bottom: 16px;
-            outline: none;
-            transition: border-color 0.15s;
-        }
-        input:focus { border-color: var(--accent); }
+        .subtitle { color: var(--text-muted); font-size: 0.9rem; line-height: 1.55; margin-bottom: 28px; }
         .btn-primary {
+            display: block;
             width: 100%;
             background: var(--accent);
             color: var(--accent-text);
             border: none;
             border-radius: 8px;
-            padding: 11px;
+            padding: 12px;
             font-size: 1rem;
             font-weight: 700;
             cursor: pointer;
             font-family: inherit;
+            text-decoration: none;
             transition: background 0.15s;
         }
         .btn-primary:hover { background: var(--accent-hover); }
-        .error-msg {
-            color: var(--error);
-            font-size: 0.82rem;
-            margin-bottom: 14px;
-            display: none;
+        .note { color: var(--text-muted); font-size: 0.8rem; line-height: 1.55; margin-top: 18px; }
+        .note a { color: var(--accent); text-decoration: none; }
+        .note a:hover { text-decoration: underline; }
+        .error-msg { color: var(--error); font-size: 0.85rem; line-height: 1.5; margin-bottom: 18px; }
+        .status { color: var(--text-muted); font-size: 0.9rem; }
+        [hidden] { display: none !important; }
+        .spinner {
+            width: 22px; height: 22px;
+            border: 2.5px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            margin: 10px auto;
+            animation: spin 0.7s linear infinite;
         }
-        .divider { text-align: center; color: var(--text-muted); font-size: 0.82rem; margin: 18px 0; }
-        .btn-secondary {
-            width: 100%;
-            background: transparent;
-            color: var(--accent);
-            border: 1px solid var(--accent);
-            border-radius: 8px;
-            padding: 10px;
-            font-size: 0.92rem;
-            font-weight: 600;
-            cursor: pointer;
-            font-family: inherit;
-            transition: background 0.15s;
-        }
-        .btn-secondary:hover { background: rgba(99,102,241,0.08); }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2s; } }
     </style>
 </head>
 <body>
     <div class="card">
         <h1>cain</h1>
-        <p class="subtitle">Sign in to your task planner</p>
-        <div id="error-msg" class="error-msg"></div>
-        <label for="email">Email</label>
-        <input type="email" id="email" placeholder="you@example.com" autocomplete="email" />
-        <label for="password">Password</label>
-        <input type="password" id="password" placeholder="••••••••" autocomplete="current-password" />
-        <button class="btn-primary" id="signin-btn">Sign In</button>
-        <div class="divider">or</div>
-        <button class="btn-secondary" id="signup-btn">Create Account</button>
+
+        <div id="checking">
+            <div class="spinner"></div>
+            <p class="status">Checking your sign in...</p>
+        </div>
+
+        <div id="signed-out" hidden>
+            <p class="subtitle">Plan your work, track deadlines, and run a focus timer. Uses the same account as your SAT prep.</p>
+            <a id="login-link" class="btn-primary" href="#">Continue with cain</a>
+            <p class="note">You will be sent to <a href="https://cainsat.org" target="_blank" rel="noopener">cainsat.org</a> to sign in, then brought straight back here.</p>
+        </div>
+
+        <div id="unreachable" hidden>
+            <p class="error-msg">Could not reach cainsat.org to check your sign in.</p>
+            <a id="retry-link" class="btn-primary" href="#">Try again</a>
+            <p class="note">If this keeps happening, cainsat.org may be down. Your saved tasks are safe.</p>
+        </div>
     </div>
 
     <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js";
-        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-auth.js";
+        import { getSession, loginUrl } from './api.js';
 
-        const firebaseConfig = {
-            apiKey: "AIzaSyCN8wH8WMmXtFSN8yFAVrizTS7IqLQzWKg",
-            authDomain: "steazyplanner.firebaseapp.com",
-            projectId: "steazyplanner",
-            storageBucket: "steazyplanner.firebasestorage.app",
-            messagingSenderId: "231639329077",
-            appId: "1:231639329077:web:4242cb4d5f9ff81b9fc47c"
-        };
+        const APP_PAGE = new URL('/main_page.html', location.href).href;
 
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
+        const checking = document.getElementById('checking');
+        const signedOut = document.getElementById('signed-out');
+        const unreachable = document.getElementById('unreachable');
+        const loginLink = document.getElementById('login-link');
 
-        onAuthStateChanged(auth, (user) => {
-            if (user) window.location.replace('/main_page.html');
-        });
-
-        function showError(msg) {
-            const el = document.getElementById('error-msg');
-            el.textContent = msg;
-            el.style.display = 'block';
+        function show(el) {
+            for (const node of [checking, signedOut, unreachable]) node.hidden = node !== el;
         }
 
-        document.getElementById('signin-btn').addEventListener('click', async () => {
-            const email = document.getElementById('email').value.trim();
-            const password = document.getElementById('password').value;
-            try {
-                await signInWithEmailAndPassword(auth, email, password);
-            } catch (err) {
-                showError(err.message.replace('Firebase: ', '').replace(/ \(.*\)/, ''));
-            }
+        document.getElementById('retry-link').addEventListener('click', (e) => {
+            e.preventDefault();
+            location.reload();
         });
 
-        document.getElementById('signup-btn').addEventListener('click', async () => {
-            const email = document.getElementById('email').value.trim();
-            const password = document.getElementById('password').value;
-            try {
-                await createUserWithEmailAndPassword(auth, email, password);
-            } catch (err) {
-                showError(err.message.replace('Firebase: ', '').replace(/ \(.*\)/, ''));
+        // Land on whatever page the app bounced the student off, and on the
+        // planner otherwise.
+        let target = APP_PAGE;
+        try {
+            const stored = sessionStorage.getItem('postLoginRedirect');
+            sessionStorage.removeItem('postLoginRedirect');
+            // Same-origin only: a planted value must not become an open
+            // redirect once sign in completes.
+            if (stored && new URL(stored, location.href).origin === location.origin) {
+                target = new URL(stored, location.href).href;
             }
-        });
+        } catch (e) { /* malformed value, keep the default */ }
 
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') document.getElementById('signin-btn').click();
-        });
+        loginLink.href = loginUrl(target);
+
+        try {
+            const user = await getSession();
+            if (user) location.replace(target);
+            else show(signedOut);
+        } catch (err) {
+            console.error('Session check failed:', err);
+            show(unreachable);
+        }
     </script>
 </body>
 </html>

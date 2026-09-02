@@ -1,4 +1,13 @@
-import { doc, setDoc } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js";
+import { saveTasksRemote, saveSettingsRemote, makeDebouncedSaver } from './api.js';
+import {
+    ymdFromDate,
+    parseDateYMD,
+    parseLocalDateTime,
+    getNextRepeatDate,
+    nextRepeatReminder,
+    formatTaskDateDisplay,
+    parseTaskKeywords,
+} from './planner-logic.js';
 
 document.addEventListener('DOMContentLoaded', () => {
 
@@ -6,23 +15,38 @@ document.addEventListener('DOMContentLoaded', () => {
         navigator.serviceWorker.register('./sw.js').catch(() => {});
     }
 
-// new repo commit test
-
-    // Populate the date/time spans if present
-    const now = new Date();
     const pad = n => String(n).padStart(2, '0');
 
+    /**
+     * Anything that means "right now" reads the clock when it is asked, not when
+     * the page loaded. A planner is commonly left open overnight, and a captured
+     * Date made every one of these wrong after midnight: "Today" highlighted
+     * yesterday, !today set a due date in the past, and a repeating task
+     * anchored to the wrong day.
+     */
+    function nowDate() { return new Date(); }
+    function todayYMD() { return ymdFromDate(new Date()); }
+
+    /** Collision-free ids. Date.now() repeats when two rows are made in one tick. */
+    function newId() {
+        if (window.crypto && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+        return `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+    }
+
+    // Only used to pick the month the calendar opens on.
+    const now = new Date();
+
     const yearEl = document.getElementById('year');
-    if (yearEl) yearEl.textContent = now.getFullYear();
-
     const monthEl = document.getElementById('month');
-    if (monthEl) monthEl.textContent = pad(now.getMonth() + 1);
-
     const dayEl = document.getElementById('day');
-    if (dayEl) dayEl.textContent = pad(now.getDate());
 
-    const minuteEl = document.getElementById('minute');
-    if (minuteEl) minuteEl.textContent = pad(now.getMinutes());
+    function refreshTodayDisplay() {
+        const d = nowDate();
+        if (yearEl) yearEl.textContent = d.getFullYear();
+        if (monthEl) monthEl.textContent = pad(d.getMonth() + 1);
+        if (dayEl) dayEl.textContent = pad(d.getDate());
+    }
+    refreshTodayDisplay();
 
     // Delete confirmation modal setup
     const deleteConfirmModal = document.getElementById('delete-confirm-modal');
@@ -64,6 +88,31 @@ document.addEventListener('DOMContentLoaded', () => {
     // Close menus when clicking outside
     document.addEventListener('click', () => {
         closeAllMenus();
+    });
+
+    /**
+     * The subtask panel resize, held in one place for the whole page.
+     *
+     * Null unless a divider is actually being dragged. These two listeners are
+     * registered once; the per-task versions they replaced were added again for
+     * every task on every render and never cleaned up, so a long session ended
+     * up running thousands of handlers on each mouse move.
+     */
+    let activeDrag = null;
+
+    document.addEventListener('mousemove', (e) => {
+        if (!activeDrag) return;
+        const newHeight = Math.max(0, activeDrag.startHeight + (e.clientY - activeDrag.startY));
+        activeDrag.container.style.maxHeight = `${newHeight}px`;
+        activeDrag.container.style.overflow = newHeight === 0 ? 'hidden' : 'auto';
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (!activeDrag) return;
+        activeDrag.divider.classList.remove('dragging');
+        activeDrag = null;
+        document.body.style.cursor = 'default';
+        document.body.style.userSelect = 'auto';
     });
 
     // Navigation: show/hide pages and set active link
@@ -132,6 +181,8 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderCalendar() {
         const year = currentDate.getFullYear();
         const month = currentDate.getMonth();
+        const todayStr = todayYMD();
+        refreshTodayDisplay();
 
         // Update header
         const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
@@ -167,7 +218,7 @@ document.addEventListener('DOMContentLoaded', () => {
             markDayIndicator(dayDiv);
 
             // Highlight today
-            if (day === now.getDate() && month === now.getMonth() && year === now.getFullYear()) {
+            if (dayDiv.dataset.date === todayStr) {
                 dayDiv.classList.add('today');
             }
 
@@ -205,14 +256,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // helper to convert Date to YYYY-MM-DD local format
-    function ymdFromDate(date) {
-        if (!date) return null;
-        const y = date.getFullYear();
-        const m = String(date.getMonth() + 1).padStart(2, '0');
-        const d = String(date.getDate()).padStart(2, '0');
-        return `${y}-${m}-${d}`;
-    }
 
     // render tasks for the currently selected day
     const dayTasksEl = document.getElementById('day-tasks');
@@ -224,7 +267,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!dayTasksEl) return;
         const title = document.createElement('h4');
         const dateObj = parseDateYMD(selectedDate);
-        const isToday = selectedDate === ymdFromDate(now);
+        const isToday = selectedDate === todayYMD();
         if (isToday) title.textContent = 'Tasks for Today';
         else title.textContent = `Tasks for ${dateObj.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
         const container = document.createElement('div');
@@ -249,11 +292,15 @@ document.addEventListener('DOMContentLoaded', () => {
             addRow.replaceChild(input, addBtn);
             input.focus();
 
-            let isCommitted = false;
+            // Settled by whichever of commit or cancel happens first. Removing a
+            // focused input fires blur in some browsers and not others, so
+            // without this Escape could still add the task through the blur
+            // handler below.
+            let settled = false;
 
             function commit() {
-                if (isCommitted) return;
-                isCommitted = true;
+                if (settled) return;
+                settled = true;
 
                 const val = (input.value || '').trim();
                 if (val) {
@@ -263,6 +310,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             function cancel() {
+                if (settled) return;
+                settled = true;
                 // restore button
                 if (addRow.contains(input)) addRow.replaceChild(addBtn, input);
             }
@@ -324,7 +373,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const impSelect = document.createElement('select');
                     impSelect.className = 'task-importance-select';
                     impSelect.dataset.id = task.id;
-                    const noneOpt = document.createElement('option'); noneOpt.value = ''; noneOpt.textContent = '—'; noneOpt.selected = !task.importance; impSelect.appendChild(noneOpt);
+                    const noneOpt = document.createElement('option'); noneOpt.value = ''; noneOpt.textContent = 'None'; noneOpt.selected = !task.importance; impSelect.appendChild(noneOpt);
                     const highOpt = document.createElement('option'); highOpt.value = 'high'; highOpt.textContent = 'High'; highOpt.selected = task.importance === 'high'; impSelect.appendChild(highOpt);
                     const medOpt = document.createElement('option'); medOpt.value = 'med'; medOpt.textContent = 'Med'; medOpt.selected = task.importance === 'med'; impSelect.appendChild(medOpt);
                     const lowOpt = document.createElement('option'); lowOpt.value = 'low'; lowOpt.textContent = 'Low'; lowOpt.selected = task.importance === 'low'; impSelect.appendChild(lowOpt);
@@ -365,7 +414,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     impSelect.className = 'task-importance-select';
                     impSelect.dataset.parentTaskId = item.task.id;
                     impSelect.dataset.subtaskId = subtask.id;
-                    const noneOpt = document.createElement('option'); noneOpt.value = ''; noneOpt.textContent = '—'; noneOpt.selected = !subtask.importance; impSelect.appendChild(noneOpt);
+                    const noneOpt = document.createElement('option'); noneOpt.value = ''; noneOpt.textContent = 'None'; noneOpt.selected = !subtask.importance; impSelect.appendChild(noneOpt);
                     const highOpt = document.createElement('option'); highOpt.value = 'high'; highOpt.textContent = 'High'; highOpt.selected = subtask.importance === 'high'; impSelect.appendChild(highOpt);
                     const medOpt = document.createElement('option'); medOpt.value = 'med'; medOpt.textContent = 'Med'; medOpt.selected = subtask.importance === 'med'; impSelect.appendChild(medOpt);
                     const lowOpt = document.createElement('option'); lowOpt.value = 'low'; lowOpt.textContent = 'Low'; lowOpt.selected = subtask.importance === 'low'; impSelect.appendChild(lowOpt);
@@ -393,7 +442,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Use parsed date if available, otherwise use the provided date (from calendar)
             const finalDate = parsedDate || ymd || null;
-            const task = { id: Date.now(), text: cleanText, completed: false, createdAt: Date.now(), dueDate: finalDate, importance: null, repeat: null, reminder: null, reminderFired: false };
+            const task = { id: newId(), text: cleanText, completed: false, dueDate: finalDate, importance: null, repeat: null, reminder: null, reminderFired: false, subtasks: [] };
             tasks.unshift(task);
             saveTasks();
             renderTasks();
@@ -616,28 +665,99 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ===== Task list functionality ===== \\
 
-    const TASKS_KEY = 'tasks';
     let tasks = [];
     let taskGroupBy = '';
     let taskSortBy = '';
     let taskHighlightGroup = null;
     let taskHighlightId = null;
     const recentlyCompleted = new Set();
+    /** Set once the server's list has arrived, so an early save cannot wipe it. */
+    let plannerLoaded = false;
 
     const taskInput = document.getElementById('new-task-input');
     const taskListEl = document.getElementById('task-list');
 
-    // Return empty initially, wait for Firebase
-    function loadTasks() {
-        return [];
+    // Anything typed before the list arrives would be thrown away when the
+    // server's copy replaces the in-memory array, so the box stays shut until
+    // there is a list to add to.
+    if (taskInput) {
+        taskInput.disabled = true;
+        taskInput.placeholder = 'Loading your tasks...';
     }
 
-    // Listen for the authentication system to load the user's data from Firestore
-    window.addEventListener('userDataLoaded', (e) => {
-        const userData = e.detail;
-        tasks = userData.tasks || [];
+    // ----- Sync banner -------------------------------------------------------
+    const syncBanner = document.getElementById('sync-banner');
+    const syncBannerText = document.getElementById('sync-banner-text');
+    const syncBannerRetry = document.getElementById('sync-banner-retry');
 
-        // Ensure all tasks and subtasks have required properties
+    function showSyncError(message) {
+        if (!syncBanner) return;
+        syncBannerText.textContent = message;
+        syncBanner.hidden = false;
+    }
+
+    function clearSyncError() {
+        if (syncBanner) syncBanner.hidden = true;
+    }
+
+    if (syncBannerRetry) {
+        syncBannerRetry.addEventListener('click', async () => {
+            clearSyncError();
+            try {
+                await Promise.all([saveTasksDebounced.flush(), saveSettingsDebounced.flush()]);
+            } catch (e) { /* the saver reports through onError */ }
+        });
+    }
+
+    // ----- Saving ------------------------------------------------------------
+    // Every edit posts the whole list, but the requests are coalesced: typing a
+    // task name no longer means one database write per keystroke.
+    const saveTasksDebounced = makeDebouncedSaver(saveTasksRemote, 700);
+    const saveSettingsDebounced = makeDebouncedSaver(saveSettingsRemote, 700);
+
+    saveTasksDebounced.onError = (err) => {
+        console.error('Saving tasks failed:', err);
+        showSyncError(
+            err && err.unauthorized
+                ? 'You have been signed out, so recent changes are not saved. Sign in again to keep them.'
+                : 'Could not save your latest changes. They are still on screen, but not stored yet.'
+        );
+    };
+    saveSettingsDebounced.onError = (err) => {
+        console.error('Saving settings failed:', err);
+    };
+
+    function saveTasks() {
+        // Before the first load lands, the in-memory list is empty and posting it
+        // would delete everything the account already has.
+        if (!plannerLoaded) return;
+        clearSyncError();
+        saveTasksDebounced(tasks);
+    }
+
+    function saveViewPrefs() {
+        if (!plannerLoaded) return;
+        saveSettingsDebounced({ prefs: { groupBy: taskGroupBy, sortBy: taskSortBy } });
+    }
+
+    // A pending save would otherwise be lost when the tab closes. pagehide alone
+    // is unreliable on mobile, where a backgrounded tab is often discarded
+    // without it, so the first hide flushes too.
+    function flushPendingSaves() {
+        saveTasksDebounced.flush();
+        saveSettingsDebounced.flush();
+    }
+    window.addEventListener('pagehide', flushPendingSaves);
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) flushPendingSaves();
+    });
+
+    // ----- Loading -----------------------------------------------------------
+    function applyPlannerData(data) {
+        tasks = Array.isArray(data.tasks) ? data.tasks : [];
+
+        // Fill in anything an older record predates, so the render path can
+        // assume these exist.
         tasks.forEach(task => {
             if (!task.subtasks) task.subtasks = [];
             if (!('repeat' in task)) task.repeat = null;
@@ -649,8 +769,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
 
-        // Restore view preferences
-        const prefs = userData.taskViewPrefs || {};
+        const prefs = data.prefs || {};
         taskGroupBy = prefs.groupBy || '';
         taskSortBy  = prefs.sortBy  || '';
         const gEl = document.getElementById('task-group-by');
@@ -658,46 +777,37 @@ document.addEventListener('DOMContentLoaded', () => {
         if (gEl) { gEl.value = taskGroupBy; gEl.classList.toggle('active', !!taskGroupBy); }
         if (sEl) { sEl.value = taskSortBy;  sEl.classList.toggle('active', !!taskSortBy); }
 
-        // Store pomodoro data from Firestore for later use
-        window._firestorePomodoroState = userData.pomodoroState || null;
-        window._firestorePomodoroSettings = userData.pomodoroSettings || null;
+        plannerLoaded = true;
 
-        // Re-render everything once data arrives
+        if (taskInput) {
+            taskInput.disabled = false;
+            taskInput.placeholder = 'Type a new task, then press Enter';
+        }
+
+        if (data.pomodoro && typeof window.applyPomodoroRemote === 'function') {
+            window.applyPomodoroRemote(data.pomodoro);
+        }
+
         renderTasks();
         renderCalendar();
         renderDayTasks();
         checkReminders();
+    }
+
+    // The fetch is kicked off by the page before this script's DOMContentLoaded
+    // handler runs, so the data may already be here. Check first, then listen:
+    // waiting on the event alone loses a response that arrived early.
+    if (window.plannerData) {
+        applyPlannerData(window.plannerData);
+    } else {
+        window.addEventListener('plannerDataLoaded', (e) => applyPlannerData(e.detail));
+    }
+
+    window.addEventListener('plannerLoadFailed', () => {
+        // The input stays disabled: with no list loaded, a new task could not be
+        // saved and would look like it had been.
+        showSyncError('Could not load your tasks from cainsat.org. Reload once you are back online.');
     });
-
-    // Save directly to Firebase
-    async function saveTasks() {
-        // Optional: Keep localStorage as a backup
-        localStorage.setItem(TASKS_KEY, JSON.stringify(tasks));
-
-        if (window.currentUserUid && window.db) {
-            const userDocRef = doc(window.db, "users", window.currentUserUid);
-            try {
-                await setDoc(userDocRef, {
-                    tasks: tasks
-                }, { merge: true });
-            } catch (error) {
-                console.error("Error updating database:", error);
-            }
-        }
-    }
-
-    async function saveViewPrefs() {
-        if (window.currentUserUid && window.db) {
-            const userDocRef = doc(window.db, "users", window.currentUserUid);
-            try {
-                await setDoc(userDocRef, {
-                    taskViewPrefs: { groupBy: taskGroupBy, sortBy: taskSortBy }
-                }, { merge: true });
-            } catch (error) {
-                console.error("Error saving view prefs:", error);
-            }
-        }
-    }
 
     function renderTasks() {
         if (!taskListEl) return;
@@ -787,7 +897,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             const noneOpt = document.createElement('option');
             noneOpt.value = '';
-            noneOpt.textContent = '—';
+            noneOpt.textContent = 'None';
             noneOpt.selected = !task.importance;
             impSelect.appendChild(noneOpt);
             
@@ -822,7 +932,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const badge = document.createElement('span');
                 badge.className = 'task-date-badge';
                 badge.tabIndex = 0;
-                badge.title = new Date(task.dueDate).toLocaleDateString();
+                badge.title = parseDateYMD(task.dueDate).toLocaleDateString();
                 badge.textContent = formatTaskDateDisplay(task.dueDate);
                 
                 // Apply red color if task is overdue
@@ -921,7 +1031,7 @@ document.addEventListener('DOMContentLoaded', () => {
             bellBtn.className = 'task-bell-btn' + (task.reminder ? ' active' : '');
             bellBtn.textContent = '🔔';
             bellBtn.title = task.reminder
-                ? `Reminder: ${new Date(task.reminder).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+                ? reminderLabel(task.reminder)
                 : 'Set reminder';
 
             const bellPopover = document.createElement('div');
@@ -950,7 +1060,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     task.reminder = `${d}T${t}`;
                     task.reminderFired = false;
                     bellBtn.classList.add('active');
-                    bellBtn.title = `Reminder: ${new Date(task.reminder).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
+                    bellBtn.title = reminderLabel(task.reminder);
                 } else {
                     task.reminder = null;
                     task.reminderFired = false;
@@ -982,7 +1092,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 closeAllMenus();
                 bellPopover.classList.toggle('hidden');
                 if (!bellPopover.classList.contains('hidden')) {
-                    if (!reminderDateInput.value) reminderDateInput.value = task.dueDate || ymdFromDate(now);
+                    if (!reminderDateInput.value) reminderDateInput.value = task.dueDate || todayYMD();
                     requestNotifPermission();
                     reminderDateInput.focus();
                 }
@@ -1053,42 +1163,23 @@ document.addEventListener('DOMContentLoaded', () => {
             divider.className = 'subtask-divider';
             divider.dataset.taskId = task.id;
             
-            let isDragging = false;
-            let startY = 0;
-            let startHeight = 0;
-            
+            // Only the mousedown lives on the element. The move and release
+            // handlers are registered once for the whole document (see
+            // activeDrag below): binding them here meant two new document
+            // listeners per task on every single re-render, none ever removed.
             divider.addEventListener('mousedown', (e) => {
-                isDragging = true;
-                startY = e.clientY;
-                startHeight = subtasksContainer.offsetHeight;
+                e.preventDefault();
+                activeDrag = {
+                    divider,
+                    container: subtasksContainer,
+                    startY: e.clientY,
+                    startHeight: subtasksContainer.offsetHeight,
+                };
                 divider.classList.add('dragging');
                 document.body.style.cursor = 'row-resize';
                 document.body.style.userSelect = 'none';
             });
-            
-            document.addEventListener('mousemove', (e) => {
-                if (!isDragging || divider.dataset.taskId !== task.id) return;
-                
-                const deltaY = e.clientY - startY;
-                const newHeight = Math.max(0, startHeight + deltaY);
-                
-                subtasksContainer.style.maxHeight = newHeight + 'px';
-                if (newHeight === 0) {
-                    subtasksContainer.style.overflow = 'hidden';
-                } else {
-                    subtasksContainer.style.overflow = 'auto';
-                }
-            });
-            
-            document.addEventListener('mouseup', () => {
-                if (isDragging) {
-                    isDragging = false;
-                    divider.classList.remove('dragging');
-                    document.body.style.cursor = 'default';
-                    document.body.style.userSelect = 'auto';
-                }
-            });
-            
+
             li.appendChild(divider);
             
             // Subtasks container (rendered below the main task row)
@@ -1118,7 +1209,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (existingBadge) existingBadge.replaceWith(input);
         input.focus();
 
+        let settled = false;
+
         function commit() {
+            if (settled) return;
+            settled = true;
             const val = input.value || null;
             tasks = tasks.map(t => t.id === task.id ? Object.assign({}, t, { dueDate: val }) : t);
             saveTasks();
@@ -1128,6 +1223,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         function cancel() {
+            if (settled) return;
+            settled = true;
             renderTasks();
         }
 
@@ -1151,18 +1248,22 @@ document.addEventListener('DOMContentLoaded', () => {
         input.focus();
         input.select();
         
+        let settled = false;
+
         function commit() {
+            if (settled) return;
+            settled = true;
             const newText = (input.value || '').trim();
             if (newText && newText !== task.text) {
                 task.text = newText;
                 saveTasks();
-                renderTasks();
-            } else {
-                renderTasks();
             }
+            renderTasks();
         }
-        
+
         function cancel() {
+            if (settled) return;
+            settled = true;
             renderTasks();
         }
         
@@ -1173,76 +1274,13 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    function parseTaskKeywords(text) {
-        // Extract keywords starting with ! and return { cleanText, dueDate }
-        const keywordRegex = /\s*!(\w+)/g;
-        let cleanText = text;
-        let dueDate = null;
-        let match;
-
-        while ((match = keywordRegex.exec(text)) !== null) {
-            const keyword = match[1].toLowerCase();
-            cleanText = cleanText.replace(match[0], ''); // remove keyword from text
-
-            // Parse date keywords
-            if (keyword === 'today') {
-                dueDate = ymdFromDate(now);
-            } else if (keyword === 'tomorrow') {
-                const tomorrow = new Date(now);
-                tomorrow.setDate(tomorrow.getDate() + 1);
-                dueDate = ymdFromDate(tomorrow);
-            } else if (keyword === 'monday' || keyword === 'mon') {
-                const d = new Date(now);
-                const day = d.getDay();
-                const daysUntilMonday = (1 - day + 7) % 7 || 7;
-                d.setDate(d.getDate() + daysUntilMonday);
-                dueDate = ymdFromDate(d);
-            } else if (keyword === 'tuesday' || keyword === 'tue') {
-                const d = new Date(now);
-                const day = d.getDay();
-                const daysUntilTuesday = (2 - day + 7) % 7 || 7;
-                d.setDate(d.getDate() + daysUntilTuesday);
-                dueDate = ymdFromDate(d);
-            } else if (keyword === 'wednesday' || keyword === 'wed') {
-                const d = new Date(now);
-                const day = d.getDay();
-                const daysUntilWednesday = (3 - day + 7) % 7 || 7;
-                d.setDate(d.getDate() + daysUntilWednesday);
-                dueDate = ymdFromDate(d);
-            } else if (keyword === 'thursday' || keyword === 'thu') {
-                const d = new Date(now);
-                const day = d.getDay();
-                const daysUntilThursday = (4 - day + 7) % 7 || 7;
-                d.setDate(d.getDate() + daysUntilThursday);
-                dueDate = ymdFromDate(d);
-            } else if (keyword === 'friday' || keyword === 'fri') {
-                const d = new Date(now);
-                const day = d.getDay();
-                const daysUntilFriday = (5 - day + 7) % 7 || 7;
-                d.setDate(d.getDate() + daysUntilFriday);
-                dueDate = ymdFromDate(d);
-            } else if (keyword === 'saturday' || keyword === 'sat') {
-                const d = new Date(now);
-                const day = d.getDay();
-                const daysUntilSaturday = (6 - day + 7) % 7 || 7;
-                d.setDate(d.getDate() + daysUntilSaturday);
-                dueDate = ymdFromDate(d);
-            } else if (keyword === 'sunday' || keyword === 'sun') {
-                const d = new Date(now);
-                const day = d.getDay();
-                const daysUntilSunday = (0 - day + 7) % 7 || 7;
-                d.setDate(d.getDate() + daysUntilSunday);
-                dueDate = ymdFromDate(d);
-            } else if (keyword === 'nextweek') {
-                const d = new Date(now);
-                d.setDate(d.getDate() + 7);
-                dueDate = ymdFromDate(d);
-            }
-        }
-
-        cleanText = cleanText.trim();
-        return { cleanText, dueDate };
-    }
+    /**
+     * Pulls date shortcuts like "!today" or "!friday" out of a task name.
+     *
+     * Only words this function actually understands are removed. The old build
+     * stripped every !word before checking, so "Buy milk !urgent" silently
+     * became "Buy milk" -- text vanished with no way to tell why.
+     */
 
     function addTask(text) {
         const trimmed = String(text || '').trim();
@@ -1253,7 +1291,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!cleanText) return; // if all text was keywords, skip
 
         // Create task with parsed dueDate and no importance by default
-        const task = { id: Date.now(), text: cleanText, completed: false, createdAt: Date.now(), dueDate: dueDate || null, importance: null, repeat: null, reminder: null, reminderFired: false };
+        const task = { id: newId(), text: cleanText, completed: false, dueDate: dueDate || null, importance: null, repeat: null, reminder: null, reminderFired: false, subtasks: [] };
         tasks.unshift(task);
         saveTasks();
         taskHighlightId = task.id;
@@ -1267,22 +1305,18 @@ document.addEventListener('DOMContentLoaded', () => {
         const strId = String(tasks[idx].id);
         if (completed && tasks[idx].repeat) {
             const src = tasks[idx];
-            const anchorDate = src.dueDate || ymdFromDate(now);
+            const anchorDate = src.dueDate || todayYMD();
             if (!src.dueDate) tasks[idx].dueDate = anchorDate;
             tasks[idx].completed = true;
-            let nextReminder = null;
-            if (src.reminder) {
-                const rd = new Date(src.reminder);
-                if (src.repeat.unit === 'days') rd.setDate(rd.getDate() + src.repeat.n);
-                else if (src.repeat.unit === 'weeks') rd.setDate(rd.getDate() + src.repeat.n * 7);
-                else if (src.repeat.unit === 'months') rd.setMonth(rd.getMonth() + src.repeat.n);
-                nextReminder = rd.toISOString().slice(0, 16);
-            }
+            // Shifted in local wall-clock time. The old code moved the date and
+            // then wrote it back with toISOString(), which converts to UTC: a
+            // 9:00 reminder in Toronto came back as 13:00, and every further
+            // repeat pushed it another offset later.
+            const nextReminder = nextRepeatReminder(src.reminder, src.repeat);
             const nextTask = {
-                id: Date.now(),
+                id: newId(),
                 text: src.text,
                 completed: false,
-                createdAt: Date.now(),
                 dueDate: getNextRepeatDate(anchorDate, src.repeat),
                 importance: src.importance,
                 repeat: src.repeat,
@@ -1358,7 +1392,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         const noneOpt = document.createElement('option');
         noneOpt.value = '';
-        noneOpt.textContent = '—';
+        noneOpt.textContent = 'None';
         noneOpt.selected = !subtask.importance;
         impSelect.appendChild(noneOpt);
         
@@ -1390,7 +1424,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (subtask.dueDate) {
             const badge = document.createElement('span');
             badge.className = 'subtask-date-badge';
-            badge.title = new Date(subtask.dueDate).toLocaleDateString();
+            badge.title = parseDateYMD(subtask.dueDate).toLocaleDateString();
             badge.textContent = formatTaskDateDisplay(subtask.dueDate);
             badge.addEventListener('click', () => startEditingSubtaskDate(parentTaskId, subtask.id, subtaskEl));
             dateElement = badge;
@@ -1461,22 +1495,26 @@ document.addEventListener('DOMContentLoaded', () => {
         subtasksContainer.insertBefore(input, subtasksContainer.firstChild);
         input.focus();
         
-        let isCommitted = false;
-        
+        // Settled by whichever of commit or cancel happens first, so an Escape
+        // is not undone by the blur that follows removing the input.
+        let settled = false;
+
         function commit() {
-            if (isCommitted) return; // Prevent double commits
-            isCommitted = true;
-            
+            if (settled) return;
+            settled = true;
+
             const text = (input.value || '').trim();
             if (text) {
                 addSubtask(parentTaskId, text);
-            } else {
-                cancel();
+            } else if (subtasksContainer.contains(input)) {
+                subtasksContainer.removeChild(input);
             }
         }
-        
+
         function cancel() {
-            if (!isCommitted && subtasksContainer.contains(input)) {
+            if (settled) return;
+            settled = true;
+            if (subtasksContainer.contains(input)) {
                 subtasksContainer.removeChild(input);
             }
         }
@@ -1493,7 +1531,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!parentTask) return;
         if (!parentTask.subtasks) parentTask.subtasks = [];
         
-        const subtask = { id: Date.now(), text: text, completed: false, importance: null, dueDate: null };
+        const subtask = { id: newId(), text: text, completed: false, importance: null, dueDate: null };
         parentTask.subtasks.push(subtask);
         saveTasks();
         renderTasks();
@@ -1541,14 +1579,19 @@ document.addEventListener('DOMContentLoaded', () => {
         if (existingDateEl) existingDateEl.replaceWith(input);
         input.focus();
         
+        let settled = false;
+
         function commit() {
-            const val = input.value || null;
-            subtask.dueDate = val;
+            if (settled) return;
+            settled = true;
+            subtask.dueDate = input.value || null;
             saveTasks();
             renderTasks();
         }
-        
+
         function cancel() {
+            if (settled) return;
+            settled = true;
             renderTasks();
         }
         
@@ -1584,18 +1627,22 @@ document.addEventListener('DOMContentLoaded', () => {
         input.focus();
         input.select();
         
+        let settled = false;
+
         function commit() {
+            if (settled) return;
+            settled = true;
             const newText = (input.value || '').trim();
             if (newText && newText !== subtask.text) {
                 subtask.text = newText;
                 saveTasks();
-                renderTasks();
-            } else {
-                renderTasks();
             }
+            renderTasks();
         }
-        
+
         function cancel() {
+            if (settled) return;
+            settled = true;
             renderTasks();
         }
         
@@ -1606,57 +1653,19 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    function parseDateYMD(ymd) {
-        if (!ymd) return null;
-        const parts = String(ymd).split('-');
-        if (parts.length !== 3) return null;
-        const y = parseInt(parts[0], 10);
-        const m = parseInt(parts[1], 10) - 1;
-        const d = parseInt(parts[2], 10);
-        return new Date(y, m, d);
+
+
+    /** Tooltip text for the bell. Falls back rather than throwing on a bad value. */
+    function reminderLabel(reminder) {
+        const d = parseLocalDateTime(reminder);
+        if (!d) return 'Set reminder';
+        return `Reminder: ${d.toLocaleString(undefined, {
+            month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+        })}`;
     }
 
-    function startOfWeekMon(date) {
-        const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-        const day = (d.getDay() + 6) % 7; // 0=Mondayshift
-        d.setDate(d.getDate() - day);
-        d.setHours(0,0,0,0);
-        return d;
-    }
 
-    function formatTaskDateDisplay(ymd) {
-        const d = parseDateYMD(ymd);
-        if (!d) return '';
-        const today = new Date();
-        
-        // Normalize dates to compare just the day part
-        const todayYMD = ymdFromDate(today);
-        const yesterday = new Date(today);
-        yesterday.setDate(yesterday.getDate() - 1);
-        const yesterdayYMD = ymdFromDate(yesterday);
-        const tomorrow = new Date(today);
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        const tomorrowYMD = ymdFromDate(tomorrow);
-        
-        // Check for Today, Tomorrow, Yesterday
-        if (ymd === todayYMD) {
-            return 'Today';
-        } else if (ymd === tomorrowYMD) {
-            return 'Tomorrow';
-        } else if (ymd === yesterdayYMD) {
-            return 'Yesterday';
-        }
-        
-        // For other dates, show weekday if in same week, otherwise show month/day
-        const inSameWeek = startOfWeekMon(d).getTime() === startOfWeekMon(today).getTime();
-        const day = d.getDay(); // 0 Sun .. 6 Sat
-        const weekdayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-        if (inSameWeek && day >= 1 && day <= 5) {
-            return weekdayNames[day];
-        }
-        // else show month day
-        return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-    }
+
     
     function isTaskOverdue(task) {
         // A task is overdue if it's not completed and the due date is in the past
@@ -1689,7 +1698,8 @@ document.addEventListener('DOMContentLoaded', () => {
         let changed = false;
         tasks.forEach(task => {
             if (!task.reminder || task.reminderFired) return;
-            if (new Date(task.reminder).getTime() <= nowMs) {
+            const due = parseLocalDateTime(task.reminder);
+            if (due && due.getTime() <= nowMs) {
                 fireNotification(task);
                 task.reminderFired = true;
                 changed = true;
@@ -1698,17 +1708,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (changed) saveTasks();
     }
 
-    function getNextRepeatDate(ymd, repeat) {
-        const d = parseDateYMD(ymd);
-        if (!d || !repeat) return ymd;
-        const n = repeat.n || 1;
-        switch (repeat.unit) {
-            case 'days': d.setDate(d.getDate() + n); break;
-            case 'weeks': d.setDate(d.getDate() + n * 7); break;
-            case 'months': d.setMonth(d.getMonth() + n); break;
-        }
-        return ymdFromDate(d);
-    }
 
     // Group-by / sort-by controls
     const groupByEl = document.getElementById('task-group-by');
@@ -1731,7 +1730,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // load & initial render
-    tasks = loadTasks();
     renderTasks();
 
     // Render calendar now that tasks are loaded so we can mark days correctly
@@ -1793,52 +1791,77 @@ document.addEventListener('DOMContentLoaded', () => {
         let settings = { work: 25, short: 5, long: 15, sessions: 4 };
         let state = { mode: 'work', remaining: 25 * 60, currentSession: 0, running: false };
         let intervalId = null;
+        /**
+         * When the current period is due to end, as a timestamp. The countdown is
+         * derived from this rather than accumulated by subtracting one per tick:
+         * browsers throttle timers in a background tab to about one per minute,
+         * so the old counter ran far slower than real time and a 25 minute work
+         * period could take an hour of wall clock while the tab sat behind others.
+         */
+        let endsAt = null;
 
         function loadSettings() {
-            // Prefer Firestore data, fall back to localStorage
-            if (window._firestorePomodoroSettings) {
-                settings = Object.assign(settings, window._firestorePomodoroSettings);
-            } else {
-                try {
-                    const raw = localStorage.getItem(POMO_SETTINGS_KEY);
-                    if (raw) settings = Object.assign(settings, JSON.parse(raw));
-                } catch (e) { /* ignore */ }
-            }
+            try {
+                const raw = localStorage.getItem(POMO_SETTINGS_KEY);
+                if (raw) settings = Object.assign(settings, JSON.parse(raw));
+            } catch (e) { /* private browsing or malformed value */ }
         }
 
+        /**
+         * localStorage keeps the timer responsive on this device; the account
+         * copy is what follows a student to another one. It is debounced and
+         * only sent on real transitions, never on a tick.
+         */
         function saveSettings() {
             try { localStorage.setItem(POMO_SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {}
-            if (window.currentUserUid && window.db) {
-                const userDocRef = doc(window.db, "users", window.currentUserUid);
-                setDoc(userDocRef, { pomodoroSettings: { ...settings } }, { merge: true })
-                    .catch(err => console.error("Error saving pomo settings:", err));
-            }
+            saveSettingsDebounced({ pomodoroSettings: { ...settings } });
         }
 
         function loadState() {
-            // Prefer Firestore data, fall back to localStorage
-            if (window._firestorePomodoroState) {
-                state = Object.assign(state, window._firestorePomodoroState);
-                state.running = false; // never auto-resume a running timer
-            } else {
-                try {
-                    const raw = localStorage.getItem(POMO_STATE_KEY);
-                    if (raw) {
-                        const s = JSON.parse(raw);
-                        state = Object.assign(state, s);
-                    }
-                } catch (e) { /* ignore */ }
-            }
+            try {
+                const raw = localStorage.getItem(POMO_STATE_KEY);
+                if (raw) state = Object.assign(state, JSON.parse(raw));
+            } catch (e) { /* private browsing or malformed value */ }
+            state.running = false; // never auto-resume on load
         }
 
         function saveState() {
             try { localStorage.setItem(POMO_STATE_KEY, JSON.stringify(state)); } catch (e) {}
-            if (window.currentUserUid && window.db) {
-                const userDocRef = doc(window.db, "users", window.currentUserUid);
-                setDoc(userDocRef, { pomodoroState: { ...state } }, { merge: true })
-                    .catch(err => console.error("Error saving pomo state:", err));
-            }
+            saveSettingsDebounced({
+                pomodoroState: {
+                    mode: state.mode,
+                    remaining: state.remaining,
+                    currentSession: state.currentSession,
+                    runningSince: null,
+                },
+            });
         }
+
+        /**
+         * The account's saved timer, once it arrives. This runs well after the
+         * widget has already drawn itself from localStorage: the old build read
+         * the server copy synchronously at startup, before the fetch had
+         * resolved, so it always saw undefined and the stored timer never
+         * actually loaded on a second device.
+         */
+        window.applyPomodoroRemote = (pomodoro) => {
+            if (!pomodoro) return;
+            // A timer running here is newer than anything the server has.
+            if (state.running) return;
+
+            if (pomodoro.settings) {
+                settings = Object.assign(settings, pomodoro.settings);
+                if (inputWork) inputWork.value = settings.work;
+                if (inputShort) inputShort.value = settings.short;
+                if (inputLong) inputLong.value = settings.long;
+                if (inputSessions) inputSessions.value = settings.sessions;
+            }
+            if (pomodoro.state) {
+                state = Object.assign(state, pomodoro.state, { running: false });
+                if (!state.remaining || state.remaining < 1) setRemainingFromMode();
+            }
+            updateUI();
+        };
 
         function formatTime(sec) {
             const m = Math.floor(sec / 60);
@@ -1903,23 +1926,37 @@ document.addEventListener('DOMContentLoaded', () => {
             [inputWork, inputShort, inputLong, inputSessions].forEach(i => { if (i) i.disabled = disabled; });
         }
 
+        /**
+         * Recomputes the countdown from the clock. Called on a one second
+         * interval purely to repaint: if the interval is throttled or skipped
+         * entirely the next call still lands on the correct remaining time,
+         * because the deadline is what is authoritative, not the tick count.
+         */
         function tick() {
-            if (state.remaining > 0) {
-                state.remaining -= 1;
+            if (!state.running || endsAt === null) return;
+
+            const left = Math.round((endsAt - Date.now()) / 1000);
+            if (left > 0) {
+                state.remaining = left;
                 updateUI();
-                saveState();
-            } else {
-                // period ended
-                clearInterval(intervalId);
-                intervalId = null;
-                state.running = false;
-                handlePeriodEnd();
+                // Deliberately no save here. This runs once a second, and the old
+                // build wrote the whole timer to the database on every one of
+                // them: a single 25 minute period was 1,500 writes.
+                return;
             }
+
+            state.remaining = 0;
+            clearInterval(intervalId);
+            intervalId = null;
+            state.running = false;
+            endsAt = null;
+            handlePeriodEnd();
         }
 
         function startTimer() {
             if (intervalId) return; // already running
             state.running = true;
+            endsAt = Date.now() + state.remaining * 1000;
             intervalId = setInterval(tick, 1000);
             updateUI();
             saveState();
@@ -1930,10 +1967,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 clearInterval(intervalId);
                 intervalId = null;
             }
+            // Bank the real elapsed time, not whatever the last repaint showed.
+            if (state.running && endsAt !== null) {
+                state.remaining = Math.max(0, Math.round((endsAt - Date.now()) / 1000));
+            }
             state.running = false;
+            endsAt = null;
             updateUI();
             saveState();
         }
+
+        // Coming back to a throttled tab should show the right time at once
+        // rather than after the next interval fires.
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && state.running) tick();
+        });
 
         function toggleTimer() {
             if (state.running) {
@@ -2077,8 +2125,20 @@ document.addEventListener('DOMContentLoaded', () => {
         if (inputShort) inputShort.value = settings.short;
         if (inputLong) inputLong.value = settings.long;
         if (inputSessions) inputSessions.value = settings.sessions;
-        if (!state.remaining || state.remaining < 60) setRemainingFromMode();
+        // Only restart the period when nothing usable was stored. The old
+        // threshold was 60, which threw away any paused timer with less than a
+        // minute left and sent it back to a full period.
+        if (!state.remaining || state.remaining < 1) setRemainingFromMode();
         updateUI();
+
+        // The task list applies the loaded data further up this file, before
+        // applyPomodoroRemote above exists. When the response had already
+        // arrived by then -- the usual case, since the fetch starts before this
+        // script runs -- its call found nothing and the stored timer was
+        // dropped. Pick it up here instead of relying on that ordering.
+        if (window.plannerData && window.plannerData.pomodoro) {
+            window.applyPomodoroRemote(window.plannerData.pomodoro);
+        }
     }
 
     setInterval(checkReminders, 60000);

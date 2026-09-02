@@ -2,8 +2,5 @@
   "cleanUrls": true,
   "rewrites": [
     { "source": "/app", "destination": "/main_page.html" }
-  ],
-  "routes": [
-    { "src": "/", "dest": "/index.html" }
   ]
 }

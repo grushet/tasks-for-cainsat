@@ -95,7 +95,6 @@ h1, h2, h3, h4, h5, h6 {
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 /* ─── App Shell ─── */
-.welcome { display: none; }
 
 .app {
   display: flex;
@@ -1428,4 +1427,66 @@ html.dark .delete-confirm-content { box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
   .pomodoro-panel { display: none; }
   .sidebar-bottom { display: none; }
   .content { padding: 16px; }
+}
+
+/* ─── Sync banner ─────────────────────────────────────────────────
+   Loading or saving can fail (offline, signed out in another tab, cainsat.org
+   down). The planner keeps working on the in-memory list either way, so this
+   is the only thing that tells a student their edits have not landed. */
+.sync-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 16px;
+  padding: 11px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(220, 38, 38, 0.35);
+  background: rgba(220, 38, 38, 0.08);
+  color: #b91c1c;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+html.dark .sync-banner {
+  border-color: rgba(248, 113, 113, 0.35);
+  background: rgba(248, 113, 113, 0.10);
+  color: #fca5a5;
+}
+
+.sync-banner[hidden] { display: none; }
+
+.sync-banner-retry {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  border-radius: 7px;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sync-banner-retry:hover { background: rgba(220, 38, 38, 0.12); }
+html.dark .sync-banner-retry:hover { background: rgba(248, 113, 113, 0.15); }
+
+/* The ! date shortcuts were only discoverable by reading the source. */
+.task-input-hint {
+  margin: 7px 2px 0;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.task-input-hint code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.94em;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--bg-surface, rgba(127, 127, 127, 0.12));
+  border: 1px solid var(--border);
+  color: var(--text);
 }
