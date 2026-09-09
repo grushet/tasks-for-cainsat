@@ -702,10 +702,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (syncBannerRetry) {
         syncBannerRetry.addEventListener('click', async () => {
+            if (syncBannerRetry.disabled) return;
+            syncBannerRetry.disabled = true;
             clearSyncError();
             try {
                 await Promise.all([saveTasksDebounced.flush(), saveSettingsDebounced.flush()]);
             } catch (e) { /* the saver reports through onError */ }
+            syncBannerRetry.disabled = false;
+            // Hiding the banner on click and never bringing it back is how this
+            // read as success while nothing had been sent. The banner may only
+            // stay hidden if there is genuinely nothing left unsaved.
+            const stuck =
+                saveTasksDebounced.hasPending() || saveTasksDebounced.lastError() ||
+                saveSettingsDebounced.hasPending() || saveSettingsDebounced.lastError();
+            if (stuck) {
+                showSyncError('Still could not save your changes. They are on screen, but not stored yet.');
+            }
         });
     }
 

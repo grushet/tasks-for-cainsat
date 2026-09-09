@@ -99,17 +99,25 @@ export function makeDebouncedSaver(send, waitMs = 800) {
     const payload = pending;
     pending = null;
     inFlight = true;
+    let failed = false;
     try {
       await send(payload);
       lastError = null;
     } catch (err) {
       lastError = err;
-      // Surfaced by the caller's onError; the newest payload is still queued if
-      // one arrived while this was failing, so a retry happens on the next edit.
+      failed = true;
+      // Put the payload back. Without this it is simply dropped: `pending` was
+      // cleared before the await, so a later Retry hits the `pending === null`
+      // guard above, returns without sending anything, and leaves the banner
+      // hidden -- which reads as "saved" when the changes were in fact lost.
+      // A newer edit that arrived mid-flight supersedes this one and is kept.
+      if (pending === null) pending = payload;
       if (saver.onError) saver.onError(err);
     } finally {
       inFlight = false;
-      if (pending !== null) flushNow();
+      // Only chase a follow-up after a success. Re-entering on the failure path
+      // would immediately resend what was just requeued, and keep doing so.
+      if (!failed && pending !== null) flushNow();
     }
   }
 
