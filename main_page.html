@@ -287,7 +287,13 @@
             <section id="page-tasks" class="page">
                 <h2>Tasks</h2>
                 <div class="task-entry">
-                    <input id="new-task-input" class="task-input" type="text" placeholder="Type a new task, then press Enter" aria-label="New task input" aria-describedby="task-input-hint">
+                    <div class="task-entry-field">
+                        <input id="new-task-input" class="task-input" type="text" placeholder="Type a new task, then press Enter" aria-label="New task input" aria-describedby="task-input-hint">
+                        <div class="task-entry-actions">
+                            <button type="button" id="new-task-priority" class="task-entry-btn" aria-label="Set a priority for the new task"></button>
+                            <button type="button" id="new-task-date" class="task-entry-btn" aria-label="Set a due date for the new task"></button>
+                        </div>
+                    </div>
                     <p class="task-input-hint" id="task-input-hint">
                         Tip: end with <code>!today</code>, <code>!tomorrow</code>, <code>!nextweek</code>
                         or a weekday like <code>!friday</code> to set the due date.

@@ -122,6 +122,7 @@ document.addEventListener('DOMContentLoaded', () => {
         pencil:   '<path d="M21.2 6.8a1 1 0 0 0-4-4L3.8 16.2a2 2 0 0 0-.5.8l-1.3 4.4a.5.5 0 0 0 .6.6l4.4-1.3a2 2 0 0 0 .8-.5z"/><path d="m15 5 4 4"/>',
         trash:    '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
         list:     '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+        grip:     '<circle cx="9" cy="6" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="6" r="1.4" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="9" cy="18" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="18" r="1.4" fill="currentColor" stroke="none"/>',
     };
 
     function icon(name) {
@@ -353,7 +354,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return `${day}, ${time}`;
     }
 
-    /** Today, tomorrow, and the Monday coming. Never today's weekday. */
+    /** Today, tomorrow, and the Sunday coming. Never today's weekday. */
     function dateQuickPicks() {
         const base = nowDate();
         const shift = (n) => {
@@ -364,7 +365,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return [
             { label: 'Today', ymd: shift(0) },
             { label: 'Tomorrow', ymd: shift(1) },
-            { label: 'Next Mon', ymd: shift(((8 - base.getDay()) % 7) || 7) },
+            { label: 'Sun', ymd: shift(((7 - base.getDay()) % 7) || 7) },
         ];
     }
 
@@ -505,7 +506,23 @@ document.addEventListener('DOMContentLoaded', () => {
                 inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); close(); } });
             });
 
-            el.appendChild(popRow(dateInput, timeInput));
+            // The date reads as words until it is touched. A native date input
+            // can only ever show 09/10/2026, and "Today" is what the reminder
+            // actually means in the overwhelmingly common case.
+            const dateSlot = document.createElement('span');
+            dateSlot.className = 'pop-date-slot';
+            const dateBtn = popTextButton(formatTaskDateDisplay(dateInput.value) || dateInput.value, () => {
+                dateSlot.replaceChild(dateInput, dateBtn);
+                dateInput.focus();
+                if (typeof dateInput.showPicker === 'function') {
+                    try { dateInput.showPicker(); } catch { /* not allowed without a user gesture in some browsers */ }
+                }
+            });
+            dateBtn.className = 'pop-date-btn';
+            dateBtn.title = 'Change the date';
+            dateSlot.appendChild(dateBtn);
+
+            el.appendChild(popRow(dateSlot, timeInput));
 
             const actions = popRow();
             if (value) {
@@ -910,6 +927,129 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    /** Reordering by hand only means anything while nothing else is ordering
+     *  the list, so the handle is inert whenever Sort is on. */
+    function canReorder() { return !taskSortBy; }
+
+    /**
+     * Moves one task to sit either side of another in the stored array. Both
+     * are looked up again after the splice, because removing the dragged task
+     * shifts every index after it.
+     */
+    function moveTaskRelativeTo(dragId, targetId, place) {
+        const from = tasks.findIndex(t => String(t.id) === String(dragId));
+        if (from === -1 || String(dragId) === String(targetId)) return;
+        const [moved] = tasks.splice(from, 1);
+        let to = tasks.findIndex(t => String(t.id) === String(targetId));
+        if (to === -1) { tasks.splice(from, 0, moved); return; }
+        if (place === 'after') to += 1;
+        tasks.splice(to, 0, moved);
+        saveTasks();
+        renderTasks();
+        renderCalendar();
+        renderDayTasks();
+    }
+
+    /**
+     * Move up / move down, for anyone not dragging. The neighbour comes from
+     * the rendered list rather than the array, so a task only ever swaps with
+     * the row the user can see above or below it inside its own group.
+     */
+    function nudgeTask(taskId, dir) {
+        if (!canReorder()) return;
+        const li = taskListEl && taskListEl.querySelector(`.task-item[data-id="${CSS.escape(String(taskId))}"]`);
+        if (!li) return;
+        const group = li.dataset.group || '';
+        let sib = li;
+        do {
+            sib = dir < 0 ? sib.previousElementSibling : sib.nextElementSibling;
+        } while (sib && !sib.classList.contains('task-item'));
+        if (!sib || (sib.dataset.group || '') !== group) return;
+        moveTaskRelativeTo(taskId, sib.dataset.id, dir < 0 ? 'before' : 'after');
+    }
+
+    let draggingTaskId = null;
+
+    function clearDropMarkers() {
+        if (!taskListEl) return;
+        taskListEl.querySelectorAll('.task-item--drop-before, .task-item--drop-after')
+            .forEach(el => el.classList.remove('task-item--drop-before', 'task-item--drop-after'));
+    }
+
+    /** Drag and drop wiring for one row. Only rows in the same group accept a
+     *  drop: a group is a slice of the same array, and a cross-group drop
+     *  would move a task in storage without moving it on screen. */
+    function makeRowDraggable(li, task, groupLabel) {
+        if (!canReorder() || task.completed) return;
+        li.dataset.group = groupLabel || '';
+
+        li.addEventListener('dragstart', (e) => {
+            draggingTaskId = String(task.id);
+            li.classList.add('task-item--dragging');
+            e.dataTransfer.effectAllowed = 'move';
+            try { e.dataTransfer.setData('text/plain', String(task.id)); } catch { /* older browsers */ }
+        });
+
+        li.addEventListener('dragend', () => {
+            draggingTaskId = null;
+            li.classList.remove('task-item--dragging');
+            li.draggable = false;
+            clearDropMarkers();
+        });
+
+        li.addEventListener('dragover', (e) => {
+            if (!draggingTaskId || draggingTaskId === String(task.id)) return;
+            const source = taskListEl.querySelector(`.task-item[data-id="${CSS.escape(draggingTaskId)}"]`);
+            if (!source || (source.dataset.group || '') !== (li.dataset.group || '')) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            const r = li.getBoundingClientRect();
+            const after = e.clientY > r.top + r.height / 2;
+            li.classList.toggle('task-item--drop-after', after);
+            li.classList.toggle('task-item--drop-before', !after);
+        });
+
+        li.addEventListener('dragleave', () => {
+            li.classList.remove('task-item--drop-before', 'task-item--drop-after');
+        });
+
+        li.addEventListener('drop', (e) => {
+            if (!draggingTaskId) return;
+            e.preventDefault();
+            const place = li.classList.contains('task-item--drop-after') ? 'after' : 'before';
+            const dragged = draggingTaskId;
+            draggingTaskId = null;
+            clearDropMarkers();
+            moveTaskRelativeTo(dragged, task.id, place);
+        });
+    }
+
+    function dragHandle(task) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'task-drag';
+        b.appendChild(icon('grip'));
+        if (task.completed) {
+            b.disabled = true;
+            b.title = 'Completed tasks keep their place';
+        } else if (!canReorder()) {
+            b.disabled = true;
+            b.title = 'Set Sort to None to reorder by hand';
+        } else {
+            b.title = 'Drag to reorder, or use the arrow keys';
+        }
+        b.setAttribute('aria-label', 'Reorder task');
+        // The handle, not the whole row, starts the drag, so a title stays
+        // selectable and a stray swipe does not move anything.
+        b.addEventListener('mousedown', () => { if (!b.disabled) b.closest('.task-item').draggable = true; });
+        b.addEventListener('mouseup', () => { const li = b.closest('.task-item'); if (li) li.draggable = false; });
+        b.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowUp') { e.preventDefault(); nudgeTask(task.id, -1); }
+            if (e.key === 'ArrowDown') { e.preventDefault(); nudgeTask(task.id, 1); }
+        });
+        return b;
+    }
+
     function sortTasksBy(arr, sortBy) {
         if (!sortBy) return [...arr];
         const importanceOrder = { high: 0, med: 1, low: 2 };
@@ -937,7 +1077,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return [
                 { label: 'Overdue',   items: arr.filter(t => t.dueDate && t.dueDate < todayYMD) },
                 { label: 'Today',     items: arr.filter(t => t.dueDate === todayYMD) },
-                { label: 'This week', items: arr.filter(t => t.dueDate && t.dueDate > todayYMD && t.dueDate <= weekYMD) },
+                { label: 'Next 7 days', items: arr.filter(t => t.dueDate && t.dueDate > todayYMD && t.dueDate <= weekYMD) },
                 { label: 'Later',     items: arr.filter(t => t.dueDate && t.dueDate > weekYMD) },
                 { label: 'No date',   items: arr.filter(t => !t.dueDate) },
             ].filter(g => g.items.length > 0);
@@ -974,7 +1114,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const buckets = [
             { label: 'Overdue',   modifier: 'overdue', items: all.filter(i => i.dueDate && i.dueDate < todayYMD) },
             { label: 'Today',     modifier: 'today',   items: all.filter(i => i.dueDate === todayYMD) },
-            { label: 'This week', modifier: '',        items: all.filter(i => i.dueDate && i.dueDate > todayYMD && i.dueDate <= weekYMD) },
+            { label: 'Next 7 days', modifier: '',        items: all.filter(i => i.dueDate && i.dueDate > todayYMD && i.dueDate <= weekYMD) },
             { label: 'Later',     modifier: '',        items: all.filter(i => i.dueDate && i.dueDate > weekYMD) },
             // Label matches the Tasks page's own date grouping, so the
             // "+N more" link below can scroll to the matching group header.
@@ -1127,6 +1267,65 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const taskInput = document.getElementById('new-task-input');
     const taskListEl = document.getElementById('task-list');
+
+    /* ─── The new-task draft ─────────────────────────────────────────────
+       A priority and a due date can be chosen before the task exists, from
+       two buttons sitting inside the input box. They reuse the same popovers
+       a finished task uses, so there is one way to pick a priority and one
+       way to pick a date. A "!friday" typed into the text still wins over the
+       date button: a shortcut in the sentence is the later, more specific
+       instruction. */
+    const taskEntryPriorityBtn = document.getElementById('new-task-priority');
+    const taskEntryDateBtn = document.getElementById('new-task-date');
+    let draftImportance = null;
+    let draftDueDate = null;
+
+    function paintEntryBtn(btn, iconName, text, cls, title) {
+        if (!btn) return;
+        btn.className = 'task-entry-btn' + (cls ? ' ' + cls : '');
+        btn.replaceChildren(icon(iconName));
+        if (text) {
+            const span = document.createElement('span');
+            span.textContent = text;
+            btn.appendChild(span);
+        }
+        btn.title = title;
+    }
+
+    function renderTaskEntryDraft() {
+        paintEntryBtn(
+            taskEntryPriorityBtn, 'flag',
+            draftImportance ? PRIORITY_LABEL[draftImportance] : '',
+            draftImportance ? `task-entry-btn--${draftImportance}` : '',
+            draftImportance ? `Priority: ${PRIORITY_LABEL[draftImportance]}` : 'Set a priority for the new task'
+        );
+        paintEntryBtn(
+            taskEntryDateBtn, 'calendar',
+            draftDueDate ? formatTaskDateDisplay(draftDueDate) : '',
+            draftDueDate ? 'task-entry-btn--set' : '',
+            draftDueDate ? `Due ${formatTaskDateDisplay(draftDueDate)}` : 'Set a due date for the new task'
+        );
+    }
+
+    // Cleared after every add, so the next task starts from nothing rather
+    // than quietly inheriting the last one's priority.
+    function clearTaskEntryDraft() {
+        draftImportance = null;
+        draftDueDate = null;
+        renderTaskEntryDraft();
+    }
+
+    if (taskEntryPriorityBtn) {
+        taskEntryPriorityBtn.addEventListener('click', () => {
+            openPriorityPopover(taskEntryPriorityBtn, draftImportance, (v) => { draftImportance = v; renderTaskEntryDraft(); });
+        });
+    }
+    if (taskEntryDateBtn) {
+        taskEntryDateBtn.addEventListener('click', () => {
+            openDatePopover(taskEntryDateBtn, draftDueDate, (v) => { draftDueDate = v; renderTaskEntryDraft(); });
+        });
+    }
+    renderTaskEntryDraft();
 
     // Anything typed before the list arrives would be thrown away when the
     // server's copy replaces the in-memory array, so the box stays shut until
@@ -1307,7 +1506,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     });
                 }
             }
-            group.items.forEach(task => taskListEl.appendChild(buildTaskLi(task)));
+            group.items.forEach(task => taskListEl.appendChild(buildTaskLi(task, group.label)));
         });
         if (pendingNewId) {
             const newEl = taskListEl.querySelector(`input[data-id="${pendingNewId}"]`)?.closest('.task-item');
@@ -1325,7 +1524,7 @@ document.addEventListener('DOMContentLoaded', () => {
             compHeader.className = 'task-group-header task-group-header--completed';
             compHeader.textContent = 'Completed';
             taskListEl.appendChild(compHeader);
-            completedTasks.forEach(task => taskListEl.appendChild(buildTaskLi(task)));
+            completedTasks.forEach(task => taskListEl.appendChild(buildTaskLi(task, 'Completed')));
         }
 
         renderHomeSummary();
@@ -1391,22 +1590,27 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    function dueDateChip(ymd, overdue, onChange) {
-        const classes = [];
-        if (overdue) classes.push('chip--overdue');
-        else if (ymd && ymd === todayYMD()) classes.push('chip--today');
-
+    /**
+     * The due date, as plain right-aligned text on the row's own edge rather
+     * than another pill in the chip row.
+     *
+     * It sits in its own grid track, so every date in the list lines up down
+     * the right margin and the whole column can be read in one pass. The chip
+     * row is left to the properties that vary from task to task.
+     */
+    function dueDateField(ymd, overdue, onChange) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'task-due'
+            + (ymd ? '' : ' task-due--unset')
+            + (overdue ? ' task-due--overdue' : (ymd && ymd === todayYMD() ? ' task-due--today' : ''));
+        b.textContent = ymd ? formatTaskDateDisplay(ymd) : 'Date';
         const full = ymd ? parseDateYMD(ymd) : null;
-        return buildChip({
-            iconName: 'calendar',
-            text: ymd ? formatTaskDateDisplay(ymd) : 'Due',
-            classes,
-            ghost: !ymd,
-            title: full
-                ? `${overdue ? 'Overdue: due ' : 'Due '}${full.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}`
-                : 'Set a due date',
-            onClick: (b) => openDatePopover(b, ymd, onChange),
-        });
+        b.title = full
+            ? `${overdue ? 'Overdue: due ' : 'Due '}${full.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}`
+            : 'Set a due date';
+        b.addEventListener('click', () => openDatePopover(b, ymd, onChange));
+        return b;
     }
 
     function repeatChip(repeat, onChange) {
@@ -1439,7 +1643,7 @@ document.addEventListener('DOMContentLoaded', () => {
        list however long a title runs. The old row was a flex bag with
        `margin-left: auto` on the priority select, so every control sat at a
        different x depending on the length of the text beside it. */
-    function buildTaskLi(task) {
+    function buildTaskLi(task, groupLabel) {
         if (!task.subtasks) task.subtasks = [];
 
         const li = document.createElement('li');
@@ -1457,6 +1661,9 @@ document.addEventListener('DOMContentLoaded', () => {
             renderCalendar();
             renderDayTasks();
         };
+
+        li.appendChild(dragHandle(task));
+        makeRowDraggable(li, task, groupLabel);
 
         // ── checkbox
         const checkbox = document.createElement('input');
@@ -1487,7 +1694,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const chips = document.createElement('div');
         chips.className = 'task-chips';
         chips.appendChild(priorityChip(task.importance, (v) => update({ importance: v })));
-        chips.appendChild(dueDateChip(task.dueDate, isTaskOverdue(task), (v) => update({ dueDate: v })));
         chips.appendChild(repeatChip(task.repeat, (v) => update({ repeat: v })));
         chips.appendChild(reminderChip(task.reminder, task.dueDate, (v) => update({ reminder: v, reminderFired: false })));
 
@@ -1518,6 +1724,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         body.appendChild(chips);
         li.appendChild(body);
+        li.appendChild(dueDateField(task.dueDate, isTaskOverdue(task), (v) => update({ dueDate: v })));
 
         // ── "⋯". Every property is reachable from here as well as from its
         // chip, so nothing depends on hover being available.
@@ -1557,6 +1764,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     close();
                     startEditingTaskName(task, li);
                 }));
+
+                if (canReorder() && !task.completed) {
+                    el.appendChild(popSeparator());
+                    el.appendChild(popItem('grip', 'Move up', () => { close(); nudgeTask(task.id, -1); }));
+                    el.appendChild(popItem('grip', 'Move down', () => { close(); nudgeTask(task.id, 1); }));
+                }
 
                 el.appendChild(popSeparator());
 
@@ -1633,9 +1846,17 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!cleanText) return; // if all text was keywords, skip
 
         // Create task with parsed dueDate and no importance by default
-        const task = { id: newId(), text: cleanText, completed: false, dueDate: dueDate || null, importance: null, repeat: null, reminder: null, reminderFired: false, subtasks: [] };
+        const task = {
+            id: newId(),
+            text: cleanText,
+            completed: false,
+            dueDate: dueDate || draftDueDate || null,
+            importance: draftImportance || null,
+            repeat: null, reminder: null, reminderFired: false, subtasks: [],
+        };
         tasks.unshift(task);
         saveTasks();
+        clearTaskEntryDraft();
         taskHighlightId = task.id;
         renderTasks();
         renderCalendar();
@@ -1741,11 +1962,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const chips = document.createElement('div');
         chips.className = 'task-chips';
         const overdue = !subtask.completed && !!subtask.dueDate && subtask.dueDate < todayYMD();
-        chips.appendChild(dueDateChip(subtask.dueDate, overdue, (v) => update({ dueDate: v })));
         chips.appendChild(priorityChip(subtask.importance, (v) => update({ importance: v })));
         body.appendChild(chips);
 
         el.appendChild(body);
+        el.appendChild(dueDateField(subtask.dueDate, overdue, (v) => update({ dueDate: v })));
 
         const menuBtn = moreButton('Subtask actions');
         menuBtn.addEventListener('click', () => {
