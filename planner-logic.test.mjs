@@ -118,8 +118,61 @@ check('!today and !tomorrow set the right due date', () => {
     assert.deepEqual(parseTaskKeywords('Essay !tomorrow', MON), {
         cleanText: 'Essay', dueDate: '2026-09-08',
     });
-    assert.deepEqual(parseTaskKeywords('Essay !nextweek', MON), {
-        cleanText: 'Essay', dueDate: '2026-09-14',
+});
+
+check('the short forms people actually type are understood', () => {
+    // None of these is a prefix of the word they shorten, which is why they
+    // are listed rather than derived.
+    ['!td', '!tod', '!tdy'].forEach(k => {
+        assert.equal(parseTaskKeywords('x ' + k, MON).dueDate, '2026-09-07', k);
+    });
+    ['!tm', '!tmr', '!tmrw', '!tmw', '!tom'].forEach(k => {
+        assert.equal(parseTaskKeywords('x ' + k, MON).dueDate, '2026-09-08', k);
+    });
+});
+
+check('"in N days" counts forward from today', () => {
+    assert.deepEqual(parseTaskKeywords('Essay !in 3 days', MON), {
+        cleanText: 'Essay', dueDate: '2026-09-10',
+    });
+    assert.equal(parseTaskKeywords('x !in 1 day', MON).dueDate, '2026-09-08');
+    assert.equal(parseTaskKeywords('x !in 2 weeks', MON).dueDate, '2026-09-21');
+    assert.equal(parseTaskKeywords('x !in 1 month', MON).dueDate, '2026-10-07');
+});
+
+check('a month is matched by prefix, however it is abbreviated', () => {
+    ['!september 7', '!sept 7', '!sep 7', '!septem 7', '!sep7'].forEach(k => {
+        assert.equal(parseTaskKeywords('x ' + k, MON).dueDate, '2026-09-07', k);
+    });
+    // An ordinal suffix is allowed, and dropped with the rest.
+    assert.deepEqual(parseTaskKeywords('Essay !oct 3rd', MON), {
+        cleanText: 'Essay', dueDate: '2026-10-03',
+    });
+});
+
+check('a month already gone means the one coming', () => {
+    // Asked in September, March means next March, not the one just past.
+    assert.equal(parseTaskKeywords('x !mar 1', MON).dueDate, '2027-03-01');
+    assert.equal(parseTaskKeywords('x !dec 25', MON).dueDate, '2026-12-25');
+});
+
+check('an ambiguous or impossible date is left in the task name', () => {
+    // "j" is January, June and July, so it is not an answer.
+    assert.deepEqual(parseTaskKeywords('x !j 3', MON), {
+        cleanText: 'x !j 3', dueDate: null,
+    });
+    // February has no 31st, and inventing March 3rd would be worse than
+    // leaving the text alone.
+    assert.deepEqual(parseTaskKeywords('x !feb 31', MON), {
+        cleanText: 'x !feb 31', dueDate: null,
+    });
+});
+
+check('a number after a day keyword stays in the title', () => {
+    // The month branch matches "today 2" first. The number belongs to the
+    // task name, so it is handed back rather than eaten with the keyword.
+    assert.deepEqual(parseTaskKeywords('Study !today 2 hours', MON), {
+        cleanText: 'Study 2 hours', dueDate: '2026-09-07',
     });
 });
 

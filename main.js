@@ -122,6 +122,7 @@ document.addEventListener('DOMContentLoaded', () => {
         pencil:   '<path d="M21.2 6.8a1 1 0 0 0-4-4L3.8 16.2a2 2 0 0 0-.5.8l-1.3 4.4a.5.5 0 0 0 .6.6l4.4-1.3a2 2 0 0 0 .8-.5z"/><path d="m15 5 4 4"/>',
         trash:    '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
         list:     '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+        note:     '<path d="M4 5h16"/><path d="M4 10h16"/><path d="M4 15h10"/>',
         grip:     '<circle cx="9" cy="6" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="6" r="1.4" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="9" cy="18" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="18" r="1.4" fill="currentColor" stroke="none"/>',
     };
 
@@ -506,6 +507,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); close(); } });
             });
 
+            // Picking a date puts the words back. The numeric field is a way
+            // to change the date, not the way the date is read.
+            dateInput.addEventListener('change', () => {
+                dateBtn.textContent = formatTaskDateDisplay(dateInput.value) || dateInput.value;
+                if (dateSlot.contains(dateInput)) {
+                    dateSlot.replaceChild(dateBtn, dateInput);
+                    dateBtn.focus();
+                }
+            });
+
             // The date reads as words until it is touched. A native date input
             // can only ever show 09/10/2026, and "Today" is what the reminder
             // actually means in the overwhelmingly common case.
@@ -867,7 +878,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Use parsed date if available, otherwise use the provided date (from calendar)
             const finalDate = parsedDate || ymd || null;
-            const task = { id: newId(), text: cleanText, completed: false, dueDate: finalDate, importance: null, repeat: null, reminder: null, reminderFired: false, subtasks: [] };
+            const task = { id: newId(), text: cleanText, completed: false, dueDate: finalDate, importance: null, repeat: null, reminder: null, reminderFired: false, subtasks: [], description: null, pinIndex: null };
             tasks.unshift(task);
             saveTasks();
             renderTasks();
@@ -927,45 +938,84 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    /** Reordering by hand only means anything while nothing else is ordering
-     *  the list, so the handle is inert whenever Sort is on. */
-    function canReorder() { return !taskSortBy; }
+    /* ─── Manual order ───────────────────────────────────────────────────
+       A task the student has dragged carries `pinIndex`, the slot it was put
+       in inside its group. Pins are applied after sorting and grouping, so a
+       hand-placed task keeps its position even when Sort disagrees: a medium
+       task dropped above a high one stays above it under Sort by importance.
+
+       Dragging pins every row in that group, not just the one moved. Pinning
+       one alone would let the sort reshuffle everything around it, which is
+       not what "I want these three in this order" means. */
+    function pinnedIndex(task) {
+        return Number.isInteger(task.pinIndex) ? task.pinIndex : null;
+    }
 
     /**
-     * Moves one task to sit either side of another in the stored array. Both
-     * are looked up again after the splice, because removing the dragged task
-     * shifts every index after it.
+     * The order a group is actually drawn in. Pinned tasks sort by the slot
+     * they were dropped in, everything else by where the sort put it, and a
+     * tie goes to the unpinned task so a task added today still lands at the
+     * top rather than behind yesterday's pins.
      */
-    function moveTaskRelativeTo(dragId, targetId, place) {
-        const from = tasks.findIndex(t => String(t.id) === String(dragId));
-        if (from === -1 || String(dragId) === String(targetId)) return;
-        const [moved] = tasks.splice(from, 1);
-        let to = tasks.findIndex(t => String(t.id) === String(targetId));
-        if (to === -1) { tasks.splice(from, 0, moved); return; }
-        if (place === 'after') to += 1;
-        tasks.splice(to, 0, moved);
+    function applyManualOrder(items) {
+        return items
+            .map((task, i) => ({ task, i, key: pinnedIndex(task) ?? i, pinned: pinnedIndex(task) !== null }))
+            .sort((a, b) => (a.key - b.key) || (a.pinned - b.pinned) || (a.i - b.i))
+            .map(e => e.task);
+    }
+
+    /** Every task id currently drawn in one group, in the order shown. */
+    function renderedGroupIds(groupLabel) {
+        if (!taskListEl) return [];
+        return [...taskListEl.querySelectorAll('.task-item')]
+            .filter(el => (el.dataset.group || '') === (groupLabel || ''))
+            .map(el => el.dataset.id);
+    }
+
+    /** Writes an order onto the tasks it names, and redraws. */
+    function commitOrder(ids) {
+        ids.forEach((id, i) => {
+            const t = tasks.find(x => String(x.id) === String(id));
+            if (t) t.pinIndex = i;
+        });
         saveTasks();
         renderTasks();
         renderCalendar();
         renderDayTasks();
     }
 
-    /**
-     * Move up / move down, for anyone not dragging. The neighbour comes from
-     * the rendered list rather than the array, so a task only ever swaps with
-     * the row the user can see above or below it inside its own group.
-     */
-    function nudgeTask(taskId, dir) {
-        if (!canReorder()) return;
-        const li = taskListEl && taskListEl.querySelector(`.task-item[data-id="${CSS.escape(String(taskId))}"]`);
-        if (!li) return;
-        const group = li.dataset.group || '';
-        let sib = li;
-        do {
-            sib = dir < 0 ? sib.previousElementSibling : sib.nextElementSibling;
-        } while (sib && !sib.classList.contains('task-item'));
-        if (!sib || (sib.dataset.group || '') !== group) return;
-        moveTaskRelativeTo(taskId, sib.dataset.id, dir < 0 ? 'before' : 'after');
+    /** Moves one task to sit either side of another, inside its own group. */
+    function moveTaskRelativeTo(dragId, targetId, groupLabel, place) {
+        if (String(dragId) === String(targetId)) return;
+        const ids = renderedGroupIds(groupLabel);
+        const from = ids.indexOf(String(dragId));
+        if (from === -1) return;
+        ids.splice(from, 1);
+        let to = ids.indexOf(String(targetId));
+        if (to === -1) return;
+        if (place === 'after') to += 1;
+        ids.splice(to, 0, String(dragId));
+        commitOrder(ids);
+    }
+
+    /** Move up / move down, for anyone not dragging. */
+    function nudgeTask(taskId, groupLabel, dir) {
+        const ids = renderedGroupIds(groupLabel);
+        const at = ids.indexOf(String(taskId));
+        const to = at + dir;
+        if (at === -1 || to < 0 || to >= ids.length) return;
+        [ids[at], ids[to]] = [ids[to], ids[at]];
+        commitOrder(ids);
+    }
+
+    /** Hands a group back to the sort. */
+    function clearManualOrder(groupLabel) {
+        renderedGroupIds(groupLabel).forEach(id => {
+            const t = tasks.find(x => String(x.id) === String(id));
+            if (t) t.pinIndex = null;
+        });
+        saveTasks();
+        renderTasks();
     }
 
     let draggingTaskId = null;
@@ -977,11 +1027,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     /** Drag and drop wiring for one row. Only rows in the same group accept a
-     *  drop: a group is a slice of the same array, and a cross-group drop
-     *  would move a task in storage without moving it on screen. */
+     *  drop: a group is a slice of one list, and a cross-group drop would
+     *  claim a position in a list the task is not in. */
     function makeRowDraggable(li, task, groupLabel) {
-        if (!canReorder() || task.completed) return;
         li.dataset.group = groupLabel || '';
+        if (task.completed) return;
 
         li.addEventListener('dragstart', (e) => {
             draggingTaskId = String(task.id);
@@ -1020,7 +1070,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const dragged = draggingTaskId;
             draggingTaskId = null;
             clearDropMarkers();
-            moveTaskRelativeTo(dragged, task.id, place);
+            moveTaskRelativeTo(dragged, task.id, li.dataset.group, place);
         });
     }
 
@@ -1032,9 +1082,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (task.completed) {
             b.disabled = true;
             b.title = 'Completed tasks keep their place';
-        } else if (!canReorder()) {
-            b.disabled = true;
-            b.title = 'Set Sort to None to reorder by hand';
         } else {
             b.title = 'Drag to reorder, or use the arrow keys';
         }
@@ -1044,8 +1091,9 @@ document.addEventListener('DOMContentLoaded', () => {
         b.addEventListener('mousedown', () => { if (!b.disabled) b.closest('.task-item').draggable = true; });
         b.addEventListener('mouseup', () => { const li = b.closest('.task-item'); if (li) li.draggable = false; });
         b.addEventListener('keydown', (e) => {
-            if (e.key === 'ArrowUp') { e.preventDefault(); nudgeTask(task.id, -1); }
-            if (e.key === 'ArrowDown') { e.preventDefault(); nudgeTask(task.id, 1); }
+            const group = b.closest('.task-item')?.dataset.group;
+            if (e.key === 'ArrowUp') { e.preventDefault(); nudgeTask(task.id, group, -1); }
+            if (e.key === 'ArrowDown') { e.preventDefault(); nudgeTask(task.id, group, 1); }
         });
         return b;
     }
@@ -1176,10 +1224,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 bucket.items.slice(0, limit).forEach(item => {
                     const li = document.createElement('li');
                     li.addEventListener('click', () => {
-                        taskHighlightId = item.id;
-                        renderTasks();
+                        // Page first: a row inside a display:none page cannot
+                        // be scrolled to, so the jump has to land before the
+                        // flash is asked for.
                         const tasksLink = document.querySelector('.nav-link[data-target="page-tasks"]');
                         if (tasksLink) tasksLink.click();
+                        taskHighlightId = item.id;
+                        renderTasks();
                     });
 
                     const itemText = document.createElement('span');
@@ -1208,13 +1259,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     more.textContent = `+${bucket.items.length - limit} more`;
                     more.title = 'View all in Tasks';
                     more.addEventListener('click', () => {
+                        const tasksLink = document.querySelector('.nav-link[data-target="page-tasks"]');
+                        if (tasksLink) tasksLink.click();
                         taskGroupBy = 'date';
                         taskHighlightGroup = bucket.label;
                         const gEl = document.getElementById('task-group-by');
                         if (gEl) { gEl.value = 'date'; gEl.classList.add('active'); }
                         renderTasks();
-                        const tasksLink = document.querySelector('.nav-link[data-target="page-tasks"]');
-                        if (tasksLink) tasksLink.click();
                     });
                     card.appendChild(more);
                 }
@@ -1279,6 +1330,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const taskEntryDateBtn = document.getElementById('new-task-date');
     let draftImportance = null;
     let draftDueDate = null;
+    let draftDateFromText = false;
 
     function paintEntryBtn(btn, iconName, text, cls, title) {
         if (!btn) return;
@@ -1312,6 +1364,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function clearTaskEntryDraft() {
         draftImportance = null;
         draftDueDate = null;
+        draftDateFromText = false;
         renderTaskEntryDraft();
     }
 
@@ -1322,9 +1375,38 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (taskEntryDateBtn) {
         taskEntryDateBtn.addEventListener('click', () => {
-            openDatePopover(taskEntryDateBtn, draftDueDate, (v) => { draftDueDate = v; renderTaskEntryDraft(); });
+            openDatePopover(taskEntryDateBtn, draftDueDate, (v) => {
+                draftDueDate = v;
+                draftDateFromText = false;
+                renderTaskEntryDraft();
+            });
         });
     }
+
+    /**
+     * Keeps the date button and the typed shortcut saying the same thing.
+     *
+     * Typing "!today" fills the button in as you go, and deleting a character
+     * out of it empties the button again. A date picked from the button is
+     * left alone unless a shortcut appears in the text, so the two can never
+     * be showing different answers at the moment Enter is pressed. That
+     * disagreement is what made the old silent override confusing: nothing on
+     * screen said which one was going to win.
+     */
+    function syncDraftFromText() {
+        if (!taskInput) return;
+        const { dueDate } = parseTaskKeywords(taskInput.value || '');
+        if (dueDate) {
+            draftDueDate = dueDate;
+            draftDateFromText = true;
+        } else if (draftDateFromText) {
+            draftDueDate = null;
+            draftDateFromText = false;
+        }
+        renderTaskEntryDraft();
+    }
+
+    if (taskInput) taskInput.addEventListener('input', syncDraftFromText);
     renderTaskEntryDraft();
 
     // Anything typed before the list arrives would be thrown away when the
@@ -1424,6 +1506,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!task.subtasks) task.subtasks = [];
             if (!('repeat' in task)) task.repeat = null;
             if (!('reminder' in task)) task.reminder = null;
+            if (!('description' in task)) task.description = null;
+            if (!Number.isInteger(task.pinIndex)) task.pinIndex = null;
             if (!('reminderFired' in task)) task.reminderFired = false;
             task.subtasks.forEach(subtask => {
                 if (!subtask.importance) subtask.importance = null;
@@ -1506,14 +1590,15 @@ document.addEventListener('DOMContentLoaded', () => {
                     });
                 }
             }
-            group.items.forEach(task => taskListEl.appendChild(buildTaskLi(task, group.label)));
+            applyManualOrder(group.items).forEach(task => taskListEl.appendChild(buildTaskLi(task, group.label)));
         });
         if (pendingNewId) {
-            const newEl = taskListEl.querySelector(`input[data-id="${pendingNewId}"]`)?.closest('.task-item');
+            const newEl = taskListEl.querySelector(`.task-item[data-id="${CSS.escape(String(pendingNewId))}"]`);
             if (newEl) {
                 requestAnimationFrame(() => {
                     newEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    newEl.classList.add('task-item--new');
+                    newEl.classList.add('task-item--flash');
+                    setTimeout(() => newEl.classList.remove('task-item--flash'), 600);
                 });
             }
         }
@@ -1524,7 +1609,7 @@ document.addEventListener('DOMContentLoaded', () => {
             compHeader.className = 'task-group-header task-group-header--completed';
             compHeader.textContent = 'Completed';
             taskListEl.appendChild(compHeader);
-            completedTasks.forEach(task => taskListEl.appendChild(buildTaskLi(task, 'Completed')));
+            applyManualOrder(completedTasks).forEach(task => taskListEl.appendChild(buildTaskLi(task, 'Completed')));
         }
 
         renderHomeSummary();
@@ -1539,6 +1624,14 @@ document.addEventListener('DOMContentLoaded', () => {
        Not persisted on purpose. It is view state, and storing it would put a
        field on every task record the API round-trips. */
     const collapsedSubtasks = new Set();
+    const openNotes = new Set();
+
+    function isNoteOpen(taskId) { return openNotes.has(String(taskId)); }
+    function setNoteOpen(taskId, open) {
+        const key = String(taskId);
+        if (open) openNotes.add(key);
+        else openNotes.delete(key);
+    }
 
     function isSubtaskPanelOpen(taskId) { return !collapsedSubtasks.has(String(taskId)); }
 
@@ -1638,9 +1731,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     /* ─── A task row ─────────────────────────────────────────────────────
-       Three grid columns: checkbox, body, "⋯". Because they are grid tracks
-       and not flex items, the checkbox and the "⋯" line up down the whole
-       list however long a title runs. The old row was a flex bag with
+       Five grid columns: drag handle, checkbox, body, due date, "⋯", with
+       the note and the subtasks on rows of their own beneath. Because they are
+       grid tracks and not flex items, all five line up down the whole list
+       however long a title runs. The old row was a flex bag with
        `margin-left: auto` on the priority select, so every control sat at a
        different x depending on the length of the text beside it. */
     function buildTaskLi(task, groupLabel) {
@@ -1683,12 +1777,42 @@ document.addEventListener('DOMContentLoaded', () => {
         label.className = 'task-label';
         label.textContent = task.text;
         label.tabIndex = 0;
-        label.title = 'Click to rename';
-        label.addEventListener('click', () => startEditingTaskName(task, li));
+        label.title = 'Click for notes, Enter to rename';
+        body.appendChild(label);
+
+        // ── the note. Kept out of the row on purpose: a paragraph of context
+        // on every task turns a list you scan into a wall you read.
+        const notePanel = document.createElement('div');
+        notePanel.className = 'task-note';
+        notePanel.hidden = !isNoteOpen(task.id);
+
+        const noteBox = document.createElement('textarea');
+        noteBox.className = 'task-note-box';
+        noteBox.rows = 3;
+        noteBox.placeholder = 'Notes for this task...';
+        noteBox.value = task.description || '';
+        // Saved on the way out rather than on every keystroke, so a long note
+        // is one write and not two hundred.
+        noteBox.addEventListener('blur', () => {
+            const next = noteBox.value.trim() || null;
+            if (next !== (task.description || null)) update({ description: next });
+        });
+        noteBox.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') { e.preventDefault(); noteBox.blur(); }
+        });
+        notePanel.appendChild(noteBox);
+
+        const toggleNote = () => {
+            const open = !isNoteOpen(task.id);
+            setNoteOpen(task.id, open);
+            notePanel.hidden = !open;
+            if (open) noteBox.focus();
+        };
+        label.addEventListener('click', toggleNote);
         label.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') { e.preventDefault(); startEditingTaskName(task, li); }
+            if (e.key === ' ') { e.preventDefault(); toggleNote(); }
         });
-        body.appendChild(label);
 
         // ── chips
         const chips = document.createElement('div');
@@ -1696,6 +1820,16 @@ document.addEventListener('DOMContentLoaded', () => {
         chips.appendChild(priorityChip(task.importance, (v) => update({ importance: v })));
         chips.appendChild(repeatChip(task.repeat, (v) => update({ repeat: v })));
         chips.appendChild(reminderChip(task.reminder, task.dueDate, (v) => update({ reminder: v, reminderFired: false })));
+        // A note that is never shown needs one mark saying it is there.
+        if (task.description) {
+            chips.appendChild(buildChip({
+                iconName: 'note',
+                text: '',
+                classes: ['chip--set', 'chip--icon'],
+                title: 'Has notes. Click the title to read them.',
+                onClick: toggleNote,
+            }));
+        }
 
         const subtaskPanel = document.createElement('div');
         subtaskPanel.className = 'subtasks';
@@ -1725,6 +1859,7 @@ document.addEventListener('DOMContentLoaded', () => {
         body.appendChild(chips);
         li.appendChild(body);
         li.appendChild(dueDateField(task.dueDate, isTaskOverdue(task), (v) => update({ dueDate: v })));
+        li.appendChild(notePanel);
 
         // ── "⋯". Every property is reachable from here as well as from its
         // chip, so nothing depends on hover being available.
@@ -1765,10 +1900,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     startEditingTaskName(task, li);
                 }));
 
-                if (canReorder() && !task.completed) {
+                if (!task.completed) {
                     el.appendChild(popSeparator());
-                    el.appendChild(popItem('grip', 'Move up', () => { close(); nudgeTask(task.id, -1); }));
-                    el.appendChild(popItem('grip', 'Move down', () => { close(); nudgeTask(task.id, 1); }));
+                    el.appendChild(popItem('grip', 'Move up', () => { close(); nudgeTask(task.id, li.dataset.group, -1); }));
+                    el.appendChild(popItem('grip', 'Move down', () => { close(); nudgeTask(task.id, li.dataset.group, 1); }));
+                    if (pinnedIndex(task) !== null) {
+                        el.appendChild(popItem('list', 'Clear manual order', () => { close(); clearManualOrder(li.dataset.group); }));
+                    }
                 }
 
                 el.appendChild(popSeparator());
@@ -1853,6 +1991,7 @@ document.addEventListener('DOMContentLoaded', () => {
             dueDate: dueDate || draftDueDate || null,
             importance: draftImportance || null,
             repeat: null, reminder: null, reminderFired: false, subtasks: [],
+            description: null, pinIndex: null,
         };
         tasks.unshift(task);
         saveTasks();
@@ -1886,6 +2025,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 reminder: nextReminder,
                 reminderFired: false,
                 subtasks: [],
+                description: src.description || null,
+                pinIndex: null,
             };
             tasks.unshift(nextTask);
         } else {

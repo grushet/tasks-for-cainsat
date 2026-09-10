@@ -117,40 +117,115 @@ const DAY_KEYWORDS = new Map([
     ['saturday', 6], ['sat', 6],
 ]);
 
+// Everyone shortens "tomorrow" differently and almost none of the common forms
+// are prefixes of the word, so they are listed rather than derived.
+const TODAY_WORDS = new Set(['today', 'tod', 'tdy', 'td']);
+const TOMORROW_WORDS = new Set(['tomorrow', 'tomorow', 'tomoro', 'tomo', 'tom', 'tmrw', 'tmw', 'tmr', 'tmo', 'tm']);
+
+const MONTHS = [
+    'january', 'february', 'march', 'april', 'may', 'june',
+    'july', 'august', 'september', 'october', 'november', 'december',
+];
+
 /**
- * Pulls date shortcuts like "!today" or "!friday" out of a task name.
+ * The month a prefix names, or null.
  *
- * Only words this understands are removed. The previous version stripped every
- * !word before deciding whether it meant anything, so "Buy milk !urgent" became
- * "Buy milk" and the student had no way to tell where the text went.
+ * Months are matched by prefix rather than against a list of abbreviations,
+ * because people write Sept, Sep and Septem for the same month. A prefix that
+ * fits more than one month is not an answer: "j" could be January, June or
+ * July, so it is left alone rather than guessed at.
+ */
+export function monthFromPrefix(word) {
+    const w = String(word || '').toLowerCase();
+    if (!w) return null;
+    const hits = [];
+    for (let i = 0; i < MONTHS.length; i++) {
+        if (MONTHS[i].startsWith(w)) hits.push(i);
+    }
+    return hits.length === 1 ? hits[0] : null;
+}
+
+/**
+ * Pulls date shortcuts out of a task name.
+ *
+ * Understood, all after a "!":
+ *   today / tod / td, and tomorrow / tmrw / tm and friends
+ *   a weekday, meaning the next one and never today
+ *   in 3 days, in 2 weeks, in 1 month
+ *   a month and a day: sept 7, september 7, sep7, s 7
+ *
+ * Only what this understands is removed. Every !word used to be stripped
+ * before being understood, so "Buy milk !urgent" silently became "Buy milk"
+ * and the student had no way to tell where the text went.
  */
 export function parseTaskKeywords(text, base = new Date()) {
     let dueDate = null;
 
-    const cleanText = String(text ?? '').replace(/\s*!(\w+)/g, (match, word) => {
-        const keyword = word.toLowerCase();
-        const d = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+    const midnight = () => new Date(base.getFullYear(), base.getMonth(), base.getDate());
 
-        if (keyword === 'today') {
-            dueDate = ymdFromDate(d);
-        } else if (keyword === 'tomorrow') {
-            d.setDate(d.getDate() + 1);
-            dueDate = ymdFromDate(d);
-        } else if (keyword === 'nextweek') {
-            d.setDate(d.getDate() + 7);
-            dueDate = ymdFromDate(d);
-        } else if (DAY_KEYWORDS.has(keyword)) {
+    // "in 3 days" first, then "<word> <number>" for a month and a day, then a
+    // bare word. Order matters: the bare-word branch would otherwise take the
+    // "in" of "in 3 days" and leave "3 days" sitting in the title.
+    const PATTERN = /\s*!(?:in\s+(\d{1,4})\s*(day|days|week|weeks|month|months)\b|([a-z]+)\s*(\d{1,2})(?:st|nd|rd|th)?\b|(\w+))/gi;
+
+    const fromWord = (raw) => {
+        const word = String(raw).toLowerCase();
+        const d = midnight();
+        if (TODAY_WORDS.has(word)) return ymdFromDate(d);
+        if (TOMORROW_WORDS.has(word)) { d.setDate(d.getDate() + 1); return ymdFromDate(d); }
+        if (DAY_KEYWORDS.has(word)) {
             // The next such weekday, never today: "!friday" on a Friday means
             // the Friday coming.
-            const shift = (DAY_KEYWORDS.get(keyword) - d.getDay() + 7) % 7 || 7;
+            const shift = (DAY_KEYWORDS.get(word) - d.getDay() + 7) % 7 || 7;
             d.setDate(d.getDate() + shift);
-            dueDate = ymdFromDate(d);
-        } else {
+            return ymdFromDate(d);
+        }
+        return null;
+    };
+
+    const cleanText = String(text ?? '').replace(
+        PATTERN,
+        (match, inCount, inUnit, monthWord, monthDay, bareWord) => {
+            if (inUnit) {
+                const n = parseInt(inCount, 10);
+                const d = midnight();
+                if (inUnit.startsWith('day')) d.setDate(d.getDate() + n);
+                else if (inUnit.startsWith('week')) d.setDate(d.getDate() + n * 7);
+                else d.setMonth(d.getMonth() + n);
+                dueDate = ymdFromDate(d);
+                return '';
+            }
+
+            if (monthWord) {
+                const month = monthFromPrefix(monthWord);
+                const day = parseInt(monthDay, 10);
+                if (month !== null && day >= 1 && day <= 31) {
+                    let year = base.getFullYear();
+                    let d = new Date(year, month, day);
+                    // A month already gone means the one coming: "!sept 7"
+                    // typed in December is next September, not last.
+                    if (ymdFromDate(d) < ymdFromDate(midnight())) d = new Date(++year, month, day);
+                    // A day the month does not have, like Feb 31, would roll
+                    // into the next month. Leaving the text alone is more
+                    // honest than inventing a date the student did not name.
+                    if (d.getMonth() !== month) return match;
+                    dueDate = ymdFromDate(d);
+                    return '';
+                }
+                // Not a month after all. The word may still be a day keyword,
+                // and the number belongs to the title either way, so it is
+                // handed back rather than eaten.
+                const asDay = fromWord(monthWord);
+                if (asDay) { dueDate = asDay; return ' ' + monthDay; }
+                return match;
+            }
+
+            const ymd = fromWord(bareWord);
+            if (ymd) { dueDate = ymd; return ''; }
             // Not a date shortcut, so it belongs to the task name.
             return match;
         }
-        return '';
-    }).trim();
+    ).replace(/\s{2,}/g, ' ').trim();
 
     return { cleanText, dueDate };
 }
