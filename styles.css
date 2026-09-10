@@ -27,7 +27,7 @@
   --importance-high-text: #dc2626;
   --importance-high-border: rgba(239,68,68,0.25);
   --importance-med-bg: rgba(245,158,11,0.12);
-  --importance-med-text: #b45309;
+  --importance-med-text: #ea7317;
   --importance-med-border: rgba(245,158,11,0.3);
   --importance-low-bg: rgba(37,99,235,0.08);
   --importance-low-text: #2563eb;
@@ -718,7 +718,8 @@ html.dark .calendar-day.tasks-completed {
 .day-tasks .day-task-item:hover .chip--ghost,
 .day-tasks .day-task-item:focus-within .chip--ghost {
   opacity: 1;
-  pointer-events: auto;
+  border-color: var(--border);
+  border-style: dashed;
 }
 
 /* Day-add controls */
@@ -845,8 +846,9 @@ html.dark .calendar-day.tasks-completed {
 
    Now a row states what is true and hides what is not:
      · Set properties render as chips under the title. No chip, not set.
-     · Unset properties appear as dashed ghost chips on hover, and stay
-       visible where there is no hover (touch), so nothing is unreachable.
+     · Unset properties sit at low opacity at rest and come up to full
+       strength on hover, so the row never shows a gap where an invisible
+       chip is still holding its width.
      · One "⋯" opens a menu that can reach every property regardless.
    The row is a grid, so the checkbox and the "⋯" align down the whole list
    no matter how long a title runs. */
@@ -1107,14 +1109,14 @@ html.dark .calendar-day.tasks-completed {
 .chip--count[aria-expanded="true"] svg { transform: rotate(90deg); }
 
 /* Unset properties. Present in the layout at all times so nothing shifts on
-   hover, but not clickable or visible until the row is hovered. Where there
-   is no hover at all, they stay on: otherwise a touch user could never add a
-   date from the row. */
+   hover, and faintly visible at rest so a row never shows a blank gap where a
+   hidden chip is holding its width. Hovering the row brings them up to full
+   strength; set chips are always at full strength. */
 .chip--ghost {
   background: transparent;
-  border-style: dashed;
-  opacity: 0;
-  pointer-events: none;
+  border-color: transparent;
+  opacity: 0.3;
+  pointer-events: auto;
   transform: none;
   transition: opacity 0.13s ease, color 0.12s ease, border-color 0.12s ease;
 }
@@ -1127,13 +1129,14 @@ html.dark .calendar-day.tasks-completed {
 .subtask-item:hover > .subtask-body .chip--ghost,
 .subtask-item:focus-within > .subtask-body .chip--ghost {
   opacity: 1;
-  pointer-events: auto;
+  border-color: var(--border);
+  border-style: dashed;
 }
 
-.chip--ghost:hover { transform: none; border-style: solid; }
+.chip--ghost:hover { transform: none; opacity: 1; border-style: solid; }
 
 @media (hover: none) {
-  .chip--ghost { opacity: 1; pointer-events: auto; }
+  .chip--ghost { opacity: 1; border-color: var(--border); border-style: dashed; }
 }
 
 .task-item.completed .chip--ghost { display: none; }

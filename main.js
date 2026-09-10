@@ -152,13 +152,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function closePopover(opts = {}) {
         if (!activePopover) return;
-        const { el, anchor } = activePopover;
+        const { el, anchor, onClose } = activePopover;
         activePopover = null;
         el.remove();
         if (anchor && anchor.isConnected) {
             anchor.setAttribute('aria-expanded', 'false');
             if (opts.restoreFocus) anchor.focus();
         }
+        // Last, because onClose re-renders the list and so destroys the anchor
+        // this just finished touching.
+        if (onClose) onClose({ cancelled: !!opts.cancel });
     }
 
     function placePopover(el, anchor, align) {
@@ -205,11 +208,11 @@ document.addEventListener('DOMContentLoaded', () => {
         build(el, close);
         document.body.appendChild(el);
         anchor.setAttribute('aria-expanded', 'true');
-        activePopover = { el, anchor, align: opts.align || 'start' };
+        activePopover = { el, anchor, align: opts.align || 'start', onClose: opts.onClose || null };
         placePopover(el, anchor, activePopover.align);
 
         el.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close({ restoreFocus: true }); }
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close({ restoreFocus: true, cancel: true }); }
         });
 
         if (opts.autofocus !== false) {
@@ -230,7 +233,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && activePopover) closePopover({ restoreFocus: true });
+        if (e.key === 'Escape' && activePopover) closePopover({ restoreFocus: true, cancel: true });
     });
 
     // Fixed positioning does not follow a scrolling ancestor, so the popover
@@ -456,38 +459,60 @@ document.addEventListener('DOMContentLoaded', () => {
         }, { autofocus: false });
     }
 
+    /**
+     * Two inputs and a Done button. Nothing is written until the popover
+     * closes.
+     *
+     * It used to commit and close on every change event from either input. A
+     * time input fires change as soon as its value parses, so typing an hour
+     * shut the popover mid-entry; and picking a date committed the time box's
+     * untouched 09:00, so a reminder nobody chose appeared on the task. The
+     * time now starts blank, and a date on its own writes nothing.
+     */
     function openReminderPopover(anchor, value, fallbackYMD, onChange) {
+        let dateInput = null, timeInput = null, cleared = false, settled = false;
+
+        // A reminder is a local wall-clock string, never an instant. See
+        // planner-logic.js for why this is never routed through a Date.
+        const commit = ({ cancelled } = {}) => {
+            if (settled) return;
+            settled = true;
+            if (cancelled) return;
+            if (cleared) { if (value) onChange(null); return; }
+            const d = dateInput && dateInput.value;
+            const t = timeInput && timeInput.value;
+            // A half-filled pair is not a reminder. Leaving the old value
+            // alone beats dropping it because one box was blank.
+            if (!d || !t) return;
+            const next = `${d}T${t}`;
+            if (next !== value) onChange(next);
+        };
+
         openPopover(anchor, (el, close) => {
             el.appendChild(popLabel('Remind me'));
 
-            const dateInput = document.createElement('input');
+            dateInput = document.createElement('input');
             dateInput.type = 'date';
             dateInput.className = 'pop-input';
             dateInput.value = value ? String(value).slice(0, 10) : (fallbackYMD || todayYMD());
 
-            const timeInput = document.createElement('input');
+            timeInput = document.createElement('input');
             timeInput.type = 'time';
             timeInput.className = 'pop-input';
-            timeInput.value = value ? String(value).slice(11, 16) : '09:00';
+            timeInput.value = value ? String(value).slice(11, 16) : '';
 
-            // A reminder is a local wall-clock string, never an instant. See
-            // planner-logic.js for why this is never routed through a Date.
-            const commit = () => {
-                const d = dateInput.value;
-                const t = timeInput.value;
-                close();
-                onChange(d && t ? `${d}T${t}` : null);
-            };
             [dateInput, timeInput].forEach(inp => {
-                inp.addEventListener('change', commit);
-                inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } });
+                inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); close(); } });
             });
 
             el.appendChild(popRow(dateInput, timeInput));
 
             const actions = popRow();
-            if (value) actions.appendChild(popTextButton('Clear reminder', () => { close(); onChange(null); }, { danger: true }));
-            if (actions.children.length) el.appendChild(actions);
+            if (value) {
+                actions.appendChild(popTextButton('Clear reminder', () => { cleared = true; close(); }, { danger: true }));
+            }
+            actions.appendChild(popTextButton('Done', () => close()));
+            el.appendChild(actions);
 
             if ('Notification' in window && Notification.permission === 'denied') {
                 const note = document.createElement('p');
@@ -497,7 +522,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             requestNotifPermission();
-        }, { autofocus: false });
+        }, { autofocus: false, onClose: commit });
     }
 
     // Navigation: show/hide pages and set active link
@@ -533,6 +558,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const prevMonthBtn = document.getElementById('prev-month');
     const nextMonthBtn = document.getElementById('next-month');
 
+    /**
+     * Whether a subtask counts as done. Checking off a parent used to leave
+     * its open subtasks showing on Home and the calendar as outstanding work,
+     * so one task read as both finished and not. The stored flags are left
+     * alone, so unchecking the parent brings back exactly what was open.
+     */
+    function subtaskIsDone(task, subtask) {
+        return !!task.completed || !!subtask.completed;
+    }
+
     // Collect all items (tasks + subtasks) for a given date string
     function getItemsForDate(dateStr) {
         const items = [];
@@ -544,7 +579,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (task.subtasks) {
                 task.subtasks.forEach(sub => {
                     if (sub.dueDate === dateStr) {
-                        items.push({ completed: !!sub.completed });
+                        items.push({ completed: subtaskIsDone(task, sub) });
                     }
                 });
             }
@@ -719,7 +754,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (task.subtasks) {
                 task.subtasks.forEach(subtask => {
                     if (subtask.dueDate === selectedDate) {
-                        allMatches.push({ type: 'subtask', task, subtask });
+                        allMatches.push({ type: 'subtask', task, subtask, done: subtaskIsDone(task, subtask) });
                     }
                 });
             }
@@ -764,7 +799,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }));
                 } else {
                     const subtask = item.subtask;
-                    li.className = 'day-task-item day-subtask-item' + (subtask.completed ? ' completed' : '');
+                    li.className = 'day-task-item day-subtask-item' + (item.done ? ' completed' : '');
                     if (subtask.importance === 'high') li.classList.add('importance-high');
                     else if (subtask.importance === 'low') li.classList.add('importance-low');
                     const cb = document.createElement('input');
@@ -772,7 +807,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     cb.className = 'subtask-checkbox';
                     cb.dataset.parentTaskId = item.task.id;
                     cb.dataset.subtaskId = subtask.id;
-                    cb.checked = !!subtask.completed;
+                    cb.checked = item.done;
+                    // A parent that is done holds its subtasks done too, so
+                    // this box would spring straight back if it were clicked.
+                    if (item.task.completed) {
+                        cb.disabled = true;
+                        cb.title = 'The parent task is complete';
+                    }
                     const typeBadge = document.createElement('span');
                     typeBadge.className = 'day-task-type';
                     typeBadge.textContent = 'Subtask';
@@ -846,7 +887,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             if (task.subtasks && task.subtasks.length) {
                 task.subtasks.forEach(subtask => {
-                    if (!subtask.completed) {
+                    if (!subtaskIsDone(task, subtask)) {
                         all.push({
                             id: task.id,
                             title: `${task.text} → ${subtask.text}`,
@@ -1788,7 +1829,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!parentTask) return;
         if (!parentTask.subtasks) parentTask.subtasks = [];
         
-        const subtask = { id: newId(), text: text, completed: false, importance: null, dueDate: null };
+        // Same shortcuts as a top-level task: "Read ch. 4 !friday" is a dated
+        // subtask, and an unrecognised !word stays in the name.
+        const { cleanText, dueDate } = parseTaskKeywords(String(text || '').trim());
+        if (!cleanText) return;
+
+        const subtask = { id: newId(), text: cleanText, completed: false, importance: null, dueDate: dueDate || null };
         parentTask.subtasks.push(subtask);
         saveTasks();
         renderTasks();
