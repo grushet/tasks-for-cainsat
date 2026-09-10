@@ -1,4 +1,11 @@
-import { saveTasksRemote, saveSettingsRemote, makeDebouncedSaver } from './api.js';
+import {
+    saveTasksRemote,
+    saveSettingsRemote,
+    makeDebouncedSaver,
+    getPushConfig,
+    savePushSubscription,
+    deletePushSubscription,
+} from './api.js';
 import {
     ymdFromDate,
     parseDateYMD,
@@ -804,6 +811,15 @@ document.addEventListener('DOMContentLoaded', () => {
         renderCalendar();
         renderDayTasks();
         checkReminders();
+
+        // Re-register this browser for server-sent reminders and refresh its
+        // reported time zone. Only does anything if the student already granted
+        // notifications; the prompt itself waits for the bell button. Deferred
+        // because this can run synchronously during initial parse, before
+        // syncPushSubscription's own state is initialised further down.
+        if ('Notification' in window && Notification.permission === 'granted') {
+            Promise.resolve().then(() => syncPushSubscription());
+        }
     }
 
     // The fetch is kicked off by the page before this script's DOMContentLoaded
@@ -1689,9 +1705,87 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function requestNotifPermission() {
         if (!('Notification' in window)) return false;
-        if (Notification.permission === 'granted') return true;
+        if (Notification.permission === 'granted') { syncPushSubscription(); return true; }
         if (Notification.permission === 'denied') return false;
-        return (await Notification.requestPermission()) === 'granted';
+        const granted = (await Notification.requestPermission()) === 'granted';
+        if (granted) syncPushSubscription();
+        return granted;
+    }
+
+    /**
+     * Registers this browser with the server so a reminder can be pushed to it
+     * with the tab closed. Safe to call repeatedly: it re-sends the current
+     * subscription (the endpoint is the key server-side) and re-subscribes if
+     * the server's VAPID key has rotated.
+     *
+     * Best-effort throughout. If push is not configured, not permitted, or the
+     * subscribe fails, the in-tab checkReminders() loop still runs.
+     *
+     * Runs at most once per page load once it succeeds: the bell popover calls
+     * this every time it opens, and there is nothing to redo after the
+     * subscription is registered.
+     */
+    let pushSyncInFlight = null;
+    let pushSyncDone = false;
+    function syncPushSubscription() {
+        if (pushSyncDone) return Promise.resolve();
+        if (pushSyncInFlight) return pushSyncInFlight;
+        pushSyncInFlight = (async () => {
+            try {
+                if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+                if (!('Notification' in window) || Notification.permission !== 'granted') return;
+
+                const config = await getPushConfig();
+                if (!config || !config.enabled || !config.publicKey) return;
+
+                const reg = await navigator.serviceWorker.ready;
+                const appKey = urlBase64ToUint8Array(config.publicKey);
+
+                let sub = await reg.pushManager.getSubscription();
+                if (sub && !applicationServerKeyMatches(sub, appKey)) {
+                    // Server rotated its VAPID key; the old subscription can no
+                    // longer be pushed to. Drop it here and on the server.
+                    const stale = sub.endpoint;
+                    await sub.unsubscribe().catch(() => {});
+                    deletePushSubscription(stale).catch(() => {});
+                    sub = null;
+                }
+                if (!sub) {
+                    sub = await reg.pushManager.subscribe({
+                        userVisibleOnly: true,
+                        applicationServerKey: appKey,
+                    });
+                }
+
+                const timeZone =
+                    (Intl.DateTimeFormat().resolvedOptions().timeZone) || 'America/Toronto';
+                await savePushSubscription(sub.toJSON(), timeZone);
+                pushSyncDone = true;
+            } catch (e) {
+                console.warn('push subscription sync failed', e);
+            } finally {
+                pushSyncInFlight = null;
+            }
+        })();
+        return pushSyncInFlight;
+    }
+
+    function urlBase64ToUint8Array(base64String) {
+        const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+        const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+        const raw = atob(base64);
+        const out = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+        return out;
+    }
+
+    function applicationServerKeyMatches(subscription, wantKey) {
+        const have = subscription.options && subscription.options.applicationServerKey;
+        if (!have) return true; // nothing to compare against; treat as a match
+        const a = new Uint8Array(have);
+        if (a.length !== wantKey.length) return false;
+        for (let i = 0; i < a.length; i++) if (a[i] !== wantKey[i]) return false;
+        return true;
     }
 
     async function fireNotification(task) {

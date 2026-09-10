@@ -81,6 +81,30 @@ export function saveSettingsRemote(payload) {
 }
 
 /**
+ * Push reminders. The server fires a task's reminder even when the planner tab
+ * is closed, by pushing to a subscription registered here. `getPushConfig`
+ * reports whether the server has VAPID keys at all and hands back the public
+ * key the browser needs to subscribe.
+ */
+export function getPushConfig() {
+  return call("/api/planner/push");
+}
+
+export function savePushSubscription(subscription, timeZone) {
+  return call("/api/planner/push", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...subscription, timeZone }),
+  });
+}
+
+export function deletePushSubscription(endpoint) {
+  return call(`/api/planner/push?endpoint=${encodeURIComponent(endpoint)}`, {
+    method: "DELETE",
+  });
+}
+
+/**
  * Coalesces rapid changes into one request, and guarantees the last value wins.
  *
  * Typing a task name fires a save per keystroke and the pomodoro used to fire
