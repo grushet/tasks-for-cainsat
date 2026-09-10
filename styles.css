@@ -26,12 +26,22 @@
   --importance-high-bg: rgba(239,68,68,0.1);
   --importance-high-text: #dc2626;
   --importance-high-border: rgba(239,68,68,0.25);
+  --importance-med-bg: rgba(245,158,11,0.12);
+  --importance-med-text: #b45309;
+  --importance-med-border: rgba(245,158,11,0.3);
   --importance-low-bg: rgba(37,99,235,0.08);
   --importance-low-text: #2563eb;
   --importance-low-border: rgba(37,99,235,0.2);
 
+  /* Destructive actions */
+  --danger: #dc2626;
+  --danger-soft: rgba(220,38,38,0.08);
+
   /* Dropdown caret */
   --caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'%3E%3Cpath fill='%23666666' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+
+  /* Checkbox tick. Drawn in --accent-text, which is white in both themes. */
+  --check-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23ffffff' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 8.4l3.4 3.4L13 5.2'/%3E%3C/svg%3E");
 
   /* Group-header glow highlight */
   --glow-highlight: rgba(253, 197, 0, 0.28);
@@ -58,9 +68,15 @@ html.dark {
   --importance-high-bg: rgba(239,68,68,0.15);
   --importance-high-text: #fca5a5;
   --importance-high-border: rgba(239,68,68,0.3);
+  --importance-med-bg: rgba(245,158,11,0.16);
+  --importance-med-text: #fcd34d;
+  --importance-med-border: rgba(245,158,11,0.32);
   --importance-low-bg: rgba(37,99,235,0.15);
   --importance-low-text: #93c5fd;
   --importance-low-border: rgba(37,99,235,0.3);
+
+  --danger: #f87171;
+  --danger-soft: rgba(248,113,113,0.13);
 
   --caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'%3E%3Cpath fill='%238ba5c5' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
 
@@ -397,6 +413,35 @@ html.dark .home-summary-card--overdue {
 
 .home-summary-date--overdue { color: #ef4444 !important; }
 
+/* ─ No date box ─────────────────────────────────────────────────────
+   A task with no due date is a backlog item, not a missed one, so this box
+   stays deliberately quieter than Overdue and Today: no coloured label, no
+   tinted background. It spans the grid because it is the fifth of five boxes
+   in a two-column layout and would otherwise sit alone at half width. */
+.home-summary-card--wide { grid-column: 1 / -1; }
+
+.home-summary-card--nodate {
+  background: var(--bg-surface);
+  box-shadow: none;
+}
+
+.home-summary-card--nodate .home-summary-card-count {
+  background: var(--bg-card);
+}
+
+/* Two columns of rows once the box is full-width and there is room. */
+@media (min-width: 900px) {
+  .home-summary-card--nodate .home-summary-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 22px;
+  }
+  .home-summary-card--nodate .home-summary-list li + li { border-top: none; }
+  .home-summary-card--nodate .home-summary-list li:not(:first-child):not(:nth-child(2)) {
+    border-top: 1px solid var(--border);
+  }
+}
+
 /* ─ Task rows inside a box: flat, divider-separated ─ */
 .home-summary-list {
   list-style: none;
@@ -666,34 +711,14 @@ html.dark .calendar-day.tasks-completed {
   letter-spacing: 0.08em;
 }
 
-.day-tasks .task-importance-select {
-  margin-left: auto;
-  padding: 3px 6px;
-  font-size: 0.68rem;
-  font-weight: 600;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg-surface);
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: all 0.12s ease;
-  appearance: none;
-  background-image: var(--caret);
-  background-repeat: no-repeat;
-  background-position: right 4px center;
-  padding-right: 18px;
-}
+/* The calendar's day list uses the same priority chip as the task list, so
+   it needs the same reveal-on-hover rule for the unset case. */
+.day-tasks .day-task-item .chip { margin-left: auto; }
 
-.day-tasks .day-task-item.importance-high .task-importance-select {
-  background-color: var(--importance-high-bg);
-  color: var(--importance-high-text);
-  border-color: var(--importance-high-border);
-}
-
-.day-tasks .day-task-item.importance-low .task-importance-select {
-  background-color: var(--importance-low-bg);
-  color: var(--importance-low-text);
-  border-color: var(--importance-low-border);
+.day-tasks .day-task-item:hover .chip--ghost,
+.day-tasks .day-task-item:focus-within .chip--ghost {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* Day-add controls */
@@ -808,8 +833,25 @@ html.dark .calendar-day.tasks-completed {
 .task-input::placeholder { color: var(--text-muted); }
 .task-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
 
-/* ─── Task List ─── */
-.task-list { list-style: none; padding: 0; margin: 0; max-width: 1750px; }
+/* ─── Task List ───────────────────────────────────────────────────
+   Row anatomy, and why it is shaped this way.
+
+   The previous row put every editable property on screen at once: a
+   priority <select>, a date badge, a repeat button, a bell, an "+ Subtask"
+   button and a "⋯" menu, on every task, forever. Eight hit targets a row
+   meant a twenty-task list drew a hundred and sixty controls, none of which
+   lined up with the row above because the flex layout let the title's length
+   push them around.
+
+   Now a row states what is true and hides what is not:
+     · Set properties render as chips under the title. No chip, not set.
+     · Unset properties appear as dashed ghost chips on hover, and stay
+       visible where there is no hover (touch), so nothing is unreachable.
+     · One "⋯" opens a menu that can reach every property regardless.
+   The row is a grid, so the checkbox and the "⋯" align down the whole list
+   no matter how long a title runs. */
+
+.task-list { list-style: none; padding: 0; margin: 0; max-width: 1100px; }
 
 .task-group-header {
   padding: 14px 4px 5px;
@@ -819,15 +861,13 @@ html.dark .calendar-day.tasks-completed {
   letter-spacing: 0.08em;
   color: var(--text-muted);
   border-bottom: 1px solid var(--border);
-  margin-bottom: 6px;
+  margin-bottom: 8px;
   list-style: none;
 }
 
-.task-group-header:not(:first-child) { margin-top: 14px; }
+.task-group-header:not(:first-child) { margin-top: 18px; }
 
-.task-group-header--completed {
-  opacity: 0.55;
-}
+.task-group-header--completed { opacity: 0.55; }
 
 @keyframes group-header-glow {
   0%, 20% {
@@ -850,484 +890,555 @@ html.dark .calendar-day.tasks-completed {
 }
 
 @keyframes task-item-new {
-  0%, 15% { background: var(--glow-highlight); }
-  100%     { background: var(--bg-surface); }
+  0%, 15% { box-shadow: inset 0 0 0 2px var(--glow-highlight), 0 0 0 4px var(--glow-highlight); }
+  100%    { box-shadow: inset 0 0 0 2px transparent, 0 0 0 4px transparent; }
 }
 
 .task-item--new { animation: task-item-new 1.4s ease-out forwards; }
 
+/* ─── The row ─── */
+
 .task-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 10px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  grid-template-areas:
+    "check body more"
+    ".     subs subs";
+  align-items: start;
+  column-gap: 12px;
+  padding: 11px 12px 11px 14px;
+  border-radius: 12px;
   margin-bottom: 6px;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   color: var(--text);
   position: relative;
-  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  transition: background 0.13s ease, border-color 0.13s ease, box-shadow 0.13s ease;
 }
 
-.task-item:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
-.task-item.completed { opacity: 0.6; }
-.task-item.completed .task-label { text-decoration: line-through; color: var(--text-muted); }
+/* Priority reads as a bar on the row edge, so it is legible while scanning
+   without spending a chip on the common case. */
+.task-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: transparent;
+  transition: background 0.13s ease;
+}
 
-.task-checkbox { width: 16px; height: 16px; flex: 0 0 auto; cursor: pointer; accent-color: var(--accent); }
-.task-label { cursor: pointer; flex: 1; font-size: 0.9rem; word-break: break-word; }
+.task-item.importance-high::before { background: var(--importance-high-text); }
+.task-item.importance-med::before  { background: var(--importance-med-text); }
+.task-item.importance-low::before  { background: var(--importance-low-text); }
 
-.task-importance-select {
-  margin-left: auto;
-  padding: 5px 8px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg-input);
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: all 0.12s ease;
+.task-item:hover {
+  background: var(--bg-card);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-card);
+}
+
+.task-item:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+.task-item.completed { opacity: 0.55; }
+.task-item.completed .task-label { color: var(--text-muted); }
+
+/* ─── Checkbox ─── */
+
+.task-checkbox,
+.subtask-checkbox {
+  grid-area: check;
   appearance: none;
-  background-image: var(--caret);
-  background-repeat: no-repeat;
-  background-position: right 5px center;
-  padding-right: 20px;
-  font-family: inherit;
+  -webkit-appearance: none;
+  margin: 0;
+  flex: 0 0 auto;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--bg-card);
+  cursor: pointer;
+  transition: background-color 0.14s ease, border-color 0.14s ease, transform 0.1s ease;
 }
 
-.task-importance-select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--ring); }
-.task-importance-select option { background: var(--bg-card); color: var(--text); }
+.task-checkbox { width: 18px; height: 18px; margin-top: 2px; }
+.subtask-checkbox { width: 15px; height: 15px; margin-top: 2px; border-radius: 4px; }
 
-.task-item.importance-high .task-importance-select {
-  background-color: var(--importance-high-bg);
+.task-checkbox:hover,
+.subtask-checkbox:hover { border-color: var(--accent); }
+
+.task-checkbox:active,
+.subtask-checkbox:active { transform: scale(0.86); }
+
+.task-checkbox:checked,
+.subtask-checkbox:checked {
+  background-color: var(--accent);
+  border-color: var(--accent);
+  background-image: var(--check-mark);
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+.task-checkbox:checked { background-size: 11px 11px; }
+.subtask-checkbox:checked { background-size: 9px 9px; }
+
+.task-checkbox:focus-visible,
+.subtask-checkbox:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+/* ─── Title and chips ─── */
+
+.task-body { grid-area: body; min-width: 0; }
+
+.task-label {
+  display: inline-block;
+  cursor: text;
+  font-size: 0.92rem;
+  line-height: 1.4;
+  word-break: break-word;
+  border-radius: 4px;
+  position: relative;
+}
+
+/* Struck through by a drawn line rather than text-decoration, so completing a
+   task animates instead of snapping. */
+.task-label::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 52%;
+  height: 1.5px;
+  width: 0;
+  background: currentColor;
+  opacity: 0.7;
+  transition: width 0.22s ease;
+}
+
+.task-item.completed .task-label::after,
+.subtask-item.completed .subtask-label::after { width: 100%; }
+
+.task-label:hover { color: var(--accent); }
+.task-label:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring); }
+
+.task-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.task-chips:empty { display: none; }
+
+/* ─── Chips ─── */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 23px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.74rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease, background-color 0.12s ease, transform 0.12s ease;
+}
+
+.chip > svg { width: 12px; height: 12px; flex: 0 0 auto; }
+.chip:hover { color: var(--text); border-color: var(--border-strong); transform: translateY(-1px); }
+.chip:active { transform: translateY(0); }
+.chip:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring); }
+
+.chip--high {
+  background: var(--importance-high-bg);
   color: var(--importance-high-text);
   border-color: var(--importance-high-border);
 }
-
-.task-item.importance-low .task-importance-select {
-  background-color: var(--importance-low-bg);
-  color: var(--importance-low-text);
-  border-color: var(--importance-low-border);
+.chip--med {
+  background: var(--importance-med-bg);
+  color: var(--importance-med-text);
+  border-color: var(--importance-med-border);
 }
-
-/* Repeat button */
-.task-repeat-wrapper { position: relative; display: inline-flex; align-items: center; }
-
-.task-repeat-btn {
-  padding: 5px 7px;
-  font-size: 0.85rem;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg-surface);
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: all 0.12s ease;
-  line-height: 1;
-}
-
-.task-repeat-btn:hover { background: var(--bg-input); color: var(--text); }
-.task-repeat-btn.active {
+.chip--low {
   background: var(--importance-low-bg);
   color: var(--importance-low-text);
   border-color: var(--importance-low-border);
 }
+.chip--high:hover { color: var(--importance-high-text); }
+.chip--med:hover  { color: var(--importance-med-text); }
+.chip--low:hover  { color: var(--importance-low-text); }
 
-.task-repeat-popover {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 100;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 8px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
-  white-space: nowrap;
+/* Due today or already past are the only two states worth a colour. */
+.chip--today {
+  background: var(--importance-med-bg);
+  color: var(--importance-med-text);
+  border-color: var(--importance-med-border);
 }
-html.dark .task-repeat-popover { box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
-.task-repeat-popover.hidden { display: none; }
+.chip--overdue {
+  background: var(--importance-high-bg);
+  color: var(--importance-high-text);
+  border-color: var(--importance-high-border);
+}
+.chip--today:hover   { color: var(--importance-med-text); }
+.chip--overdue:hover { color: var(--importance-high-text); }
 
-.task-repeat-n, .task-repeat-unit {
-  padding: 5px 6px;
-  font-size: 0.8rem;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg-input);
+/* Repeat and reminder, when set. Quieter than a due date: they are context,
+   not a deadline. */
+.chip--set {
   color: var(--text);
-  font-family: inherit;
-}
-.task-repeat-n {
-  width: 48px;
-  text-align: center;
-  -moz-appearance: textfield;
-}
-.task-repeat-n::-webkit-outer-spin-button,
-.task-repeat-n::-webkit-inner-spin-button { appearance: none; margin: 0; }
-.task-repeat-n:focus, .task-repeat-unit:focus { outline: none; border-color: var(--accent); }
-.task-repeat-unit { cursor: pointer; appearance: none; }
-.task-repeat-unit option { background: var(--bg-card); color: var(--text); }
-
-/* Bell / reminder */
-.task-bell-wrapper { position: relative; display: inline-flex; align-items: center; }
-
-.task-bell-btn {
-  padding: 4px 6px;
-  font-size: 0.8rem;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg-surface);
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: all 0.12s ease;
-  line-height: 1;
-}
-.task-bell-btn:hover { background: var(--bg-input); color: var(--text); }
-.task-bell-btn.active {
-  background: var(--importance-low-bg);
-  color: var(--importance-low-text);
-  border-color: var(--importance-low-border);
+  border-color: var(--border-strong);
 }
 
-.task-bell-popover {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 100;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 8px 12px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
-  white-space: nowrap;
-}
-html.dark .task-bell-popover { box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
-.task-bell-popover.hidden { display: none; }
+.chip--count { padding-left: 7px; }
 
-.task-reminder-date,
-.task-reminder-time {
-  padding: 5px 6px;
-  font-size: 0.8rem;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg-input);
-  color: var(--text);
-  font-family: inherit;
-}
-.task-reminder-date:focus,
-.task-reminder-time:focus { outline: none; border-color: var(--accent); }
+.chip--count svg { transition: transform 0.16s ease; }
+.chip--count[aria-expanded="true"] svg { transform: rotate(90deg); }
 
-.task-reminder-clear {
-  padding: 4px 8px;
-  font-size: 0.72rem;
-  border-radius: 8px;
-  border: 1px solid rgba(239,68,68,0.3);
-  background: rgba(239,68,68,0.08);
-  color: #ef4444;
-  cursor: pointer;
-  transition: background 0.12s ease;
-}
-.task-reminder-clear:hover { background: rgba(239,68,68,0.15); }
-
-/* Date badge */
-.task-date-badge {
-  font-size: 0.8rem;
-  color: var(--text-muted);
-  background: var(--bg-surface);
-  padding: 4px 8px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-}
-
-.task-date-add {
-  font-size: 0.8rem;
-  color: var(--accent);
+/* Unset properties. Present in the layout at all times so nothing shifts on
+   hover, but not clickable or visible until the row is hovered. Where there
+   is no hover at all, they stay on: otherwise a touch user could never add a
+   date from the row. */
+.chip--ghost {
   background: transparent;
-  padding: 4px 8px;
-  border-radius: 8px;
-  border: 1px dashed var(--border);
-  cursor: pointer;
-  transition: all 0.12s ease;
-}
-.task-date-add:hover { background: var(--bg-surface); border-color: var(--accent); }
-
-.task-date-editor {
-  padding: 5px 8px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg-input);
-  color: var(--text);
-  font-size: 0.88rem;
-  font-family: inherit;
+  border-style: dashed;
+  opacity: 0;
+  pointer-events: none;
+  transform: none;
+  transition: opacity 0.13s ease, color 0.12s ease, border-color 0.12s ease;
 }
 
-/* Task menu */
-.task-menu-btn {
-  margin-left: 4px;
-  width: 24px;
-  height: 24px;
+/* Scoped through the direct child, not left to descend. A subtask sits inside
+   its task row, so an unscoped `.task-item:hover .chip--ghost` lit up the
+   dashed chips on every subtask at once the moment the parent was hovered. */
+.task-item:hover > .task-body .chip--ghost,
+.task-item:focus-within > .task-body .chip--ghost,
+.subtask-item:hover > .subtask-body .chip--ghost,
+.subtask-item:focus-within > .subtask-body .chip--ghost {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.chip--ghost:hover { transform: none; border-style: solid; }
+
+@media (hover: none) {
+  .chip--ghost { opacity: 1; pointer-events: auto; }
+}
+
+.task-item.completed .chip--ghost { display: none; }
+
+/* ─── The "⋯" trigger ─── */
+
+.task-more {
+  grid-area: more;
+  width: 26px;
+  height: 26px;
+  margin-top: -1px;
   padding: 0;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg-surface);
-  color: var(--text-muted);
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.12s ease;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  position: relative;
-}
-.task-menu-btn:hover { background: var(--bg-input); color: var(--text); }
-.task-menu-btn:active { transform: scale(0.95); }
-
-.task-menu-container {
-  position: absolute;
-  right: 0;
-  top: 100%;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.1);
-  z-index: 100;
-  display: flex;
-  flex-direction: column;
-  min-width: 120px;
-  overflow: hidden;
-}
-html.dark .task-menu-container { box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
-.task-menu-container.hidden { display: none; }
-
-.task-menu-option {
-  padding: 9px 14px;
+  border: 1px solid transparent;
+  border-radius: 7px;
   background: transparent;
-  border: none;
-  color: var(--text);
-  text-align: left;
+  color: var(--text-muted);
   cursor: pointer;
-  font-size: 0.88rem;
-  font-family: inherit;
-  transition: background 0.1s ease;
+  opacity: 0.4;
+  transition: opacity 0.13s ease, background-color 0.13s ease, color 0.13s ease, border-color 0.13s ease;
 }
-.task-menu-option:hover { background: var(--bg-surface); }
-.task-menu-option.delete-option { border-top: 1px solid var(--border); color: #ef4444; }
-.task-menu-option.delete-option:hover { background: rgba(239,68,68,0.08); }
 
-/* Task name editor */
-.task-name-editor {
-  padding: 5px 8px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
+.task-more > svg { width: 16px; height: 16px; }
+
+.task-item:hover > .task-more,
+.task-item:focus-within > .task-more,
+.task-more[aria-expanded="true"] { opacity: 1; }
+
+.task-more:hover,
+.task-more[aria-expanded="true"] {
+  background: var(--bg-input);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.task-more:focus-visible { outline: none; opacity: 1; box-shadow: 0 0 0 3px var(--ring); }
+
+@media (hover: none) { .task-more { opacity: 1; } }
+
+/* ─── Inline editors ─── */
+
+.task-name-editor,
+.subtask-name-editor,
+.subtask-input {
+  width: 100%;
+  padding: 4px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--accent);
   background: var(--bg-input);
   color: var(--text);
+  font-family: inherit;
   font-size: 0.92rem;
-  font-family: inherit;
-  flex: 1;
+  line-height: 1.4;
 }
-.task-name-editor:focus { outline: none; border-color: var(--accent); }
 
-/* Add subtask button */
-.add-subtask-btn-inline {
-  margin-left: 8px;
-  padding: 5px 10px;
-  font-size: 0.76rem;
-  font-weight: 600;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg-surface);
-  color: var(--accent);
-  cursor: pointer;
-  transition: all 0.12s ease;
-  flex: 0 0 auto;
-  font-family: inherit;
-}
-.add-subtask-btn-inline:hover { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
-.add-subtask-btn-inline:active { transform: scale(0.95); }
+.subtask-name-editor, .subtask-input { font-size: 0.87rem; }
+.task-name-editor:focus,
+.subtask-name-editor:focus,
+.subtask-input:focus { outline: none; box-shadow: 0 0 0 3px var(--ring); }
 
 /* ─── Subtasks ─── */
-.subtask-divider {
-  height: 2px;
-  background: linear-gradient(90deg, transparent, var(--border), transparent);
-  margin: 8px 0;
-  cursor: row-resize;
-  transition: all 0.15s ease;
-  border-radius: 2px;
-}
-.subtask-divider:hover {
-  height: 3px;
-  background: linear-gradient(90deg, transparent, var(--accent), transparent);
-}
-.subtask-divider.dragging {
-  height: 4px;
-  background: linear-gradient(90deg, transparent, var(--accent), transparent);
-}
 
-.subtasks-container {
-  margin-top: 8px;
-  padding-left: 28px;
+.subtasks {
+  grid-area: subs;
+  margin: 9px 0 1px;
+  padding-left: 13px;
   border-left: 2px solid var(--border);
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  transition: max-height 0.3s ease;
+  gap: 4px;
 }
+
+.subtasks[hidden] { display: none; }
 
 .subtask-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
-  border-radius: 8px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  transition: border-color 0.12s ease;
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr) auto;
+  grid-template-areas: "check body more";
+  align-items: start;
+  column-gap: 10px;
+  padding: 6px 8px 6px 10px;
+  border-radius: 9px;
+  background: transparent;
+  border: 1px solid transparent;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
 }
-.subtask-item:hover { border-color: var(--accent); }
-.subtask-item.completed .subtask-label { text-decoration: line-through; color: var(--text-muted); }
 
-.subtask-checkbox { width: 14px; height: 14px; flex: 0 0 auto; cursor: pointer; accent-color: var(--accent); }
-.subtask-label { flex: 1; font-size: 0.88rem; color: var(--text); word-break: break-word; cursor: pointer; }
+.subtask-item:hover { background: var(--bg-surface); border-color: var(--border); }
+.subtask-item.completed { opacity: 0.55; }
 
-.subtask-importance-select {
-  padding: 3px 6px;
-  font-size: 0.67rem;
-  font-weight: 600;
-  border-radius: 6px;
+.subtask-body { grid-area: body; min-width: 0; }
+
+.subtask-label {
+  display: inline-block;
+  position: relative;
+  font-size: 0.87rem;
+  line-height: 1.4;
+  color: var(--text);
+  word-break: break-word;
+  cursor: text;
+  border-radius: 4px;
+}
+
+.subtask-label::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 52%;
+  height: 1.5px;
+  width: 0;
+  background: currentColor;
+  opacity: 0.7;
+  transition: width 0.22s ease;
+}
+
+.subtask-label:hover { color: var(--accent); }
+.subtask-label:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring); }
+
+.subtask-item .task-chips { margin-top: 5px; }
+.subtask-item .chip { height: 21px; font-size: 0.71rem; padding: 0 8px; }
+.subtask-item .task-more { width: 23px; height: 23px; }
+.subtask-item .task-more > svg { width: 14px; height: 14px; }
+
+.subtask-item:hover > .task-more,
+.subtask-item:focus-within > .task-more,
+.subtask-item > .task-more[aria-expanded="true"] { opacity: 1; }
+
+/* ─── Popovers ──────────────────────────────────────────────────────
+   One implementation, mounted on <body> and positioned from the anchor's
+   box. The per-row popovers this replaces were absolutely positioned inside
+   the row with `left: 0`, so they clipped against the scroll container and
+   fell off the right edge of the last column; each also needed its own
+   stopPropagation to survive the document-wide close handler. */
+
+.pop {
+  position: fixed;
+  z-index: 400;
+  min-width: 208px;
+  /* Wide enough for a native date input beside a native time input. Those two
+     have a browser-imposed minimum width and will not shrink politely. */
+  max-width: 320px;
+  padding: 9px;
+  border-radius: 13px;
   border: 1px solid var(--border);
-  background: var(--bg-surface);
+  background: var(--bg-card);
+  color: var(--text);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.16), 0 2px 8px rgba(0, 0, 0, 0.06);
+  animation: pop-in 0.14s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+html.dark .pop { box-shadow: 0 14px 44px rgba(0, 0, 0, 0.6); }
+
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(-5px) scale(0.985); }
+  to   { opacity: 1; transform: none; }
+}
+
+.pop--above { transform-origin: bottom center; }
+
+.pop-label {
+  padding: 4px 5px 6px;
+  font-size: 0.64rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
   color: var(--text-muted);
+}
+
+.pop-sep { height: 1px; margin: 6px -9px; background: var(--border); }
+
+/* Wraps rather than clips: a native date input has a floor on how narrow it
+   will go, so on a small viewport the second control drops to its own line. */
+.pop-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pop-row + .pop-row { margin-top: 6px; }
+
+.pop-quick { display: flex; flex-wrap: wrap; gap: 5px; }
+
+.pop-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.82rem;
+}
+
+.pop-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+.pop-input--n { flex: 0 0 54px; text-align: center; -moz-appearance: textfield; }
+.pop-input--n::-webkit-outer-spin-button,
+.pop-input--n::-webkit-inner-spin-button { appearance: none; margin: 0; }
+.pop-input option { background: var(--bg-card); color: var(--text); }
+
+select.pop-input {
   cursor: pointer;
   appearance: none;
+  padding-right: 22px;
   background-image: var(--caret);
   background-repeat: no-repeat;
-  background-position: right 3px center;
-  padding-right: 16px;
-  font-family: inherit;
-}
-.subtask-item.importance-high .subtask-importance-select {
-  background-color: var(--importance-high-bg);
-  color: var(--importance-high-text);
-  border-color: var(--importance-high-border);
-}
-.subtask-item.importance-low .subtask-importance-select {
-  background-color: var(--importance-low-bg);
-  color: var(--importance-low-text);
-  border-color: var(--importance-low-border);
+  background-position: right 7px center;
 }
 
-.subtask-date-badge {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  background: var(--bg-surface);
-  padding: 3px 6px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  cursor: pointer;
-}
-
-.subtask-date-add {
-  font-size: 0.75rem;
-  color: var(--accent);
-  background: transparent;
-  padding: 3px 6px;
-  border-radius: 6px;
-  border: 1px dashed var(--border);
-  cursor: pointer;
-  transition: all 0.12s ease;
-}
-.subtask-date-add:hover { background: var(--bg-surface); border-color: var(--accent); }
-
-.subtask-date-editor {
-  padding: 4px 6px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg-input);
-  color: var(--text);
-  font-size: 0.82rem;
-  font-family: inherit;
-}
-
-.subtask-menu-btn {
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border-radius: 5px;
-  border: 1px solid var(--border);
-  background: var(--bg-surface);
-  color: var(--text-muted);
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.12s ease;
+/* Menu rows */
+.pop-item {
   display: flex;
   align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  position: relative;
-}
-.subtask-menu-btn:hover { background: var(--bg-input); color: var(--text); }
-.subtask-menu-btn:active { transform: scale(0.95); }
-
-.subtask-menu-container {
-  position: absolute;
-  right: 0;
-  top: 100%;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.1);
-  z-index: 100;
-  display: flex;
-  flex-direction: column;
-  min-width: 100px;
-  overflow: hidden;
-}
-html.dark .subtask-menu-container { box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
-.subtask-menu-container.hidden { display: none; }
-
-.subtask-menu-option {
-  padding: 8px 12px;
-  background: transparent;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 9px;
   border: none;
+  border-radius: 8px;
+  background: transparent;
   color: var(--text);
+  font-family: inherit;
+  font-size: 0.86rem;
   text-align: left;
   cursor: pointer;
-  font-size: 0.85rem;
-  font-family: inherit;
-  transition: background 0.1s ease;
-}
-.subtask-menu-option:hover { background: var(--bg-surface); }
-.subtask-menu-option.delete-option { border-top: 1px solid var(--border); color: #ef4444; }
-.subtask-menu-option.delete-option:hover { background: rgba(239,68,68,0.08); }
-
-.subtask-name-editor {
-  padding: 5px 8px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg-input);
-  color: var(--text);
-  font-size: 0.88rem;
-  font-family: inherit;
-  flex: 1;
+  transition: background-color 0.1s ease, color 0.1s ease;
 }
 
-.subtask-input {
-  padding: 5px 8px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
+.pop-item > svg { width: 15px; height: 15px; flex: 0 0 auto; color: var(--text-muted); }
+.pop-item:hover { background: var(--bg-surface); }
+.pop-item:hover > svg { color: var(--text); }
+.pop-item:focus-visible { outline: none; background: var(--bg-surface); box-shadow: 0 0 0 2px var(--ring); }
+.pop-item-value { margin-left: auto; font-size: 0.76rem; color: var(--text-muted); }
+
+.pop-item--danger { color: var(--danger); }
+.pop-item--danger > svg { color: var(--danger); }
+.pop-item--danger:hover { background: var(--danger-soft); }
+.pop-item--danger:hover > svg { color: var(--danger); }
+
+/* Segmented control, in place of the per-row native <select> */
+.seg {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 10px;
   background: var(--bg-input);
-  color: var(--text);
-  font-size: 0.88rem;
+}
+
+.seg button {
+  padding: 6px 4px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
   font-family: inherit;
-  width: 100%;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.seg button:hover { color: var(--text); }
+.seg button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+
+.seg button[aria-pressed="true"] {
+  background: var(--bg-card);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.11);
+}
+
+.seg button[aria-pressed="true"][data-v="high"] { background: var(--importance-high-bg); color: var(--importance-high-text); }
+.seg button[aria-pressed="true"][data-v="med"]  { background: var(--importance-med-bg);  color: var(--importance-med-text); }
+.seg button[aria-pressed="true"][data-v="low"]  { background: var(--importance-low-bg);  color: var(--importance-low-text); }
+
+/* Text-only action inside a popover section, e.g. Clear */
+.pop-text-btn {
+  padding: 5px 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.1s ease, color 0.1s ease;
+}
+
+.pop-text-btn:hover { background: var(--bg-surface); color: var(--text); }
+.pop-text-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+.pop-text-btn--danger:hover { background: var(--danger-soft); color: var(--danger); }
+
+.pop-note {
+  margin: 6px 5px 1px;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pop { animation: none; }
+  .task-item, .task-item::before, .chip, .task-more,
+  .task-checkbox, .subtask-checkbox,
+  .task-label::after, .subtask-label::after,
+  .chip--count svg { transition: none; }
+  .task-item--new, .task-group-header--glow { animation-duration: 0.01ms; }
 }
 
 /* ─── SAT Helper ─── */
@@ -1427,6 +1538,14 @@ html.dark .delete-confirm-content { box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
   .pomodoro-panel { display: none; }
   .sidebar-bottom { display: none; }
   .content { padding: 16px; }
+
+  /* Ghost chips are permanently visible where there is no hover, so a bare
+     task shows four of them. Tightened here to keep them on one line. */
+  .task-item { padding: 10px 8px 10px 12px; column-gap: 9px; }
+  .task-chips { gap: 5px; }
+  .chip { height: 22px; padding: 0 7px; gap: 4px; font-size: 0.71rem; }
+  .chip > svg { width: 11px; height: 11px; }
+  .pop { max-width: calc(100vw - 20px); }
 }
 
 /* ─── Sync banner ─────────────────────────────────────────────────

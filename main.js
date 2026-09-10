@@ -55,28 +55,48 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     refreshTodayDisplay();
 
-    // Delete confirmation modal setup
+    /* ─── Delete confirmation ────────────────────────────────────────────
+       The modal already existed but nothing reached it: the old row menu
+       called deleteTask straight from its Delete item, so a task went for
+       good on one click. It now holds a callback rather than a task id, so a
+       subtask can be confirmed the same way. */
     const deleteConfirmModal = document.getElementById('delete-confirm-modal');
     const deleteConfirmCancel = document.getElementById('delete-confirm-cancel');
     const deleteConfirmYes = document.getElementById('delete-confirm-yes');
-    let pendingDeleteId = null;
+    const deleteConfirmHeading = deleteConfirmModal
+        ? deleteConfirmModal.querySelector('.delete-confirm-content h3')
+        : null;
+    const deleteConfirmText = deleteConfirmModal
+        ? deleteConfirmModal.querySelector('.delete-confirm-content p')
+        : null;
+    let pendingDelete = null;
 
-    function showDeleteConfirm(taskId) {
-        pendingDeleteId = taskId;
+    function confirmDelete(heading, message, run) {
+        if (!deleteConfirmModal) { run(); return; }
+        pendingDelete = run;
+        if (deleteConfirmHeading) deleteConfirmHeading.textContent = heading;
+        if (deleteConfirmText) deleteConfirmText.textContent = message;
         deleteConfirmModal.classList.remove('hidden');
+        if (deleteConfirmCancel) deleteConfirmCancel.focus();
     }
 
     function hideDeleteConfirm() {
-        deleteConfirmModal.classList.add('hidden');
-        pendingDeleteId = null;
+        if (deleteConfirmModal) deleteConfirmModal.classList.add('hidden');
+        pendingDelete = null;
     }
 
-    deleteConfirmCancel.addEventListener('click', hideDeleteConfirm);
-    deleteConfirmYes.addEventListener('click', () => {
-        if (pendingDeleteId) {
-            deleteTask(pendingDeleteId);
+    if (deleteConfirmCancel) deleteConfirmCancel.addEventListener('click', hideDeleteConfirm);
+    if (deleteConfirmYes) {
+        deleteConfirmYes.addEventListener('click', () => {
+            const run = pendingDelete;
+            hideDeleteConfirm();
+            if (run) run();
+        });
+    }
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && deleteConfirmModal && !deleteConfirmModal.classList.contains('hidden')) {
+            hideDeleteConfirm();
         }
-        hideDeleteConfirm();
     });
 
     // Close modal on background click
@@ -86,41 +106,399 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // Close all open menus
-    function closeAllMenus() {
-        const allMenus = document.querySelectorAll('.task-menu-container, .subtask-menu-container, .task-repeat-popover, .task-bell-popover');
-        allMenus.forEach(menu => menu.classList.add('hidden'));
+    /* ─── Icons ──────────────────────────────────────────────────────────
+       Inline SVG, not emoji. The row used to draw 🔔 and ↻ as text, which most
+       platforms render as a full-colour emoji: it ignores `color`, so those
+       buttons could not be dimmed at rest, tinted when active, or made to
+       match anything else on the page. These inherit currentColor. */
+    const ICON_PATHS = {
+        calendar: '<path d="M8 2v4M16 2v4"/><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18"/>',
+        repeat:   '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
+        bell:     '<path d="M10.3 21a2 2 0 0 0 3.4 0"/><path d="M3.3 15.3A1 1 0 0 0 4 17h16a1 1 0 0 0 .7-1.7C19.4 14 18 12.5 18 8A6 6 0 0 0 6 8c0 4.5-1.4 6-2.7 7.3"/>',
+        flag:     '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/>',
+        more:     '<circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/>',
+        chevron:  '<path d="m9 18 6-6-6-6"/>',
+        plus:     '<path d="M5 12h14M12 5v14"/>',
+        pencil:   '<path d="M21.2 6.8a1 1 0 0 0-4-4L3.8 16.2a2 2 0 0 0-.5.8l-1.3 4.4a.5.5 0 0 0 .6.6l4.4-1.3a2 2 0 0 0 .8-.5z"/><path d="m15 5 4 4"/>',
+        trash:    '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+        list:     '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+    };
+
+    function icon(name) {
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor');
+        svg.setAttribute('stroke-width', '2');
+        svg.setAttribute('stroke-linecap', 'round');
+        svg.setAttribute('stroke-linejoin', 'round');
+        svg.setAttribute('aria-hidden', 'true');
+        svg.innerHTML = ICON_PATHS[name] || '';
+        return svg;
     }
 
-    // Close menus when clicking outside
-    document.addEventListener('click', () => {
-        closeAllMenus();
-    });
+    /* ─── Popovers ───────────────────────────────────────────────────────
+       One popover at a time, mounted on <body>.
+
+       Each task row used to carry its own absolutely positioned menus: a
+       repeat popover, a reminder popover and a "⋯" menu, three per task, all
+       `position: absolute; left: 0` inside the row. That clipped against the
+       scrolling content column, ran off the right edge from the rightmost
+       control, and needed a stopPropagation on every one of them to survive
+       the document-wide close handler. A single fixed-position host measured
+       against the anchor's own box has none of those problems, and it can flip
+       above the anchor when there is no room below. */
+    let activePopover = null;
+
+    function closePopover(opts = {}) {
+        if (!activePopover) return;
+        const { el, anchor } = activePopover;
+        activePopover = null;
+        el.remove();
+        if (anchor && anchor.isConnected) {
+            anchor.setAttribute('aria-expanded', 'false');
+            if (opts.restoreFocus) anchor.focus();
+        }
+    }
+
+    function placePopover(el, anchor, align) {
+        const GAP = 6;
+        const EDGE = 8;
+        const r = anchor.getBoundingClientRect();
+        const w = el.offsetWidth;
+        const h = el.offsetHeight;
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+
+        let left = align === 'end' ? r.right - w : r.left;
+        left = Math.min(Math.max(EDGE, left), Math.max(EDGE, vw - w - EDGE));
+
+        // Below the anchor unless that would run off the bottom and there is
+        // genuinely more room above.
+        let top = r.bottom + GAP;
+        const flip = top + h > vh - EDGE && r.top - GAP - h > EDGE;
+        if (flip) top = r.top - GAP - h;
+        top = Math.min(Math.max(EDGE, top), Math.max(EDGE, vh - h - EDGE));
+
+        el.classList.toggle('pop--above', flip);
+        el.style.left = `${Math.round(left)}px`;
+        el.style.top = `${Math.round(top)}px`;
+    }
 
     /**
-     * The subtask panel resize, held in one place for the whole page.
-     *
-     * Null unless a divider is actually being dragged. These two listeners are
-     * registered once; the per-task versions they replaced were added again for
-     * every task on every render and never cleaned up, so a long session ended
-     * up running thousands of handlers on each mouse move.
+     * Opens `build(el, close)`'s content anchored to `anchor`. Clicking the
+     * same anchor again closes it, so every trigger is a toggle.
      */
-    let activeDrag = null;
+    function openPopover(anchor, build, opts = {}) {
+        const wasMine = !!activePopover && activePopover.anchor === anchor;
+        closePopover();
+        if (wasMine) return null;
 
-    document.addEventListener('mousemove', (e) => {
-        if (!activeDrag) return;
-        const newHeight = Math.max(0, activeDrag.startHeight + (e.clientY - activeDrag.startY));
-        activeDrag.container.style.maxHeight = `${newHeight}px`;
-        activeDrag.container.style.overflow = newHeight === 0 ? 'hidden' : 'auto';
+        const el = document.createElement('div');
+        el.className = 'pop';
+        el.setAttribute('role', 'dialog');
+
+        const close = (o) => {
+            if (activePopover && activePopover.el === el) closePopover(o);
+        };
+
+        build(el, close);
+        document.body.appendChild(el);
+        anchor.setAttribute('aria-expanded', 'true');
+        activePopover = { el, anchor, align: opts.align || 'start' };
+        placePopover(el, anchor, activePopover.align);
+
+        el.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close({ restoreFocus: true }); }
+        });
+
+        if (opts.autofocus !== false) {
+            const first = el.querySelector('input, select, button');
+            if (first) first.focus();
+        }
+        return el;
+    }
+
+    // mousedown rather than click, so the popover is gone before the next
+    // element's click handler runs. The anchor is excluded because its own
+    // click handler is what toggles it shut.
+    document.addEventListener('mousedown', (e) => {
+        if (!activePopover) return;
+        if (activePopover.el.contains(e.target)) return;
+        if (activePopover.anchor && activePopover.anchor.contains(e.target)) return;
+        closePopover();
     });
 
-    document.addEventListener('mouseup', () => {
-        if (!activeDrag) return;
-        activeDrag.divider.classList.remove('dragging');
-        activeDrag = null;
-        document.body.style.cursor = 'default';
-        document.body.style.userSelect = 'auto';
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && activePopover) closePopover({ restoreFocus: true });
     });
+
+    // Fixed positioning does not follow a scrolling ancestor, so the popover
+    // is re-measured rather than left behind. Not closed: a soft keyboard
+    // opening counts as a resize, and closing there would eat a half-typed
+    // reminder time.
+    function repositionPopover() {
+        if (!activePopover) return;
+        if (!activePopover.anchor.isConnected) { closePopover(); return; }
+        placePopover(activePopover.el, activePopover.anchor, activePopover.align);
+    }
+    window.addEventListener('resize', repositionPopover);
+    window.addEventListener('scroll', repositionPopover, true);
+
+    /* ─── Popover building blocks ─── */
+
+    function popLabel(text) {
+        const el = document.createElement('div');
+        el.className = 'pop-label';
+        el.textContent = text;
+        return el;
+    }
+
+    function popSeparator() {
+        const el = document.createElement('div');
+        el.className = 'pop-sep';
+        return el;
+    }
+
+    function popRow(...children) {
+        const row = document.createElement('div');
+        row.className = 'pop-row';
+        children.forEach(c => c && row.appendChild(c));
+        return row;
+    }
+
+    function popItem(iconName, text, onClick, { danger = false, value = null } = {}) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'pop-item' + (danger ? ' pop-item--danger' : '');
+        b.appendChild(icon(iconName));
+        const span = document.createElement('span');
+        span.textContent = text;
+        b.appendChild(span);
+        if (value) {
+            const v = document.createElement('span');
+            v.className = 'pop-item-value';
+            v.textContent = value;
+            b.appendChild(v);
+        }
+        b.addEventListener('click', onClick);
+        return b;
+    }
+
+    function popTextButton(text, onClick, { danger = false } = {}) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'pop-text-btn' + (danger ? ' pop-text-btn--danger' : '');
+        b.textContent = text;
+        b.addEventListener('click', onClick);
+        return b;
+    }
+
+    /** A small pill inside a popover, e.g. the "Today" quick pick. */
+    function popChip(text, onClick) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'chip';
+        b.textContent = text;
+        b.addEventListener('click', onClick);
+        return b;
+    }
+
+    /** Segmented control. `options` is [[value, label], ...]. */
+    function popSegmented(options, current, onPick) {
+        const seg = document.createElement('div');
+        seg.className = 'seg';
+        options.forEach(([value, label]) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.dataset.v = value || 'none';
+            b.textContent = label;
+            b.setAttribute('aria-pressed', String((current || '') === (value || '')));
+            b.addEventListener('click', () => onPick(value || null));
+            seg.appendChild(b);
+        });
+        return seg;
+    }
+
+    /* ─── Property editors ───────────────────────────────────────────────
+       Each takes the current value and a setter, so one implementation serves
+       tasks, subtasks and the calendar's day list. */
+
+    const PRIORITY_OPTIONS = [['', 'None'], ['low', 'Low'], ['med', 'Med'], ['high', 'High']];
+    const PRIORITY_LABEL = { high: 'High', med: 'Medium', low: 'Low' };
+
+    const REPEAT_PRESETS = [
+        { label: 'Daily', n: 1, unit: 'days' },
+        { label: 'Weekly', n: 1, unit: 'weeks' },
+        { label: 'Monthly', n: 1, unit: 'months' },
+    ];
+
+    function repeatLabel(repeat) {
+        if (!repeat) return null;
+        const n = repeat.n || 1;
+        const preset = REPEAT_PRESETS.find(p => p.n === n && p.unit === repeat.unit);
+        if (preset) return preset.label;
+        const unit = n === 1 ? String(repeat.unit).replace(/s$/, '') : repeat.unit;
+        return `Every ${n} ${unit}`;
+    }
+
+    function reminderChipLabel(reminder) {
+        const d = parseLocalDateTime(reminder);
+        if (!d) return null;
+        const day = formatTaskDateDisplay(ymdFromDate(d));
+        const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+        return `${day}, ${time}`;
+    }
+
+    /** Today, tomorrow, and the Monday coming. Never today's weekday. */
+    function dateQuickPicks() {
+        const base = nowDate();
+        const shift = (n) => {
+            const d = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+            d.setDate(d.getDate() + n);
+            return ymdFromDate(d);
+        };
+        return [
+            { label: 'Today', ymd: shift(0) },
+            { label: 'Tomorrow', ymd: shift(1) },
+            { label: 'Next Mon', ymd: shift(((8 - base.getDay()) % 7) || 7) },
+        ];
+    }
+
+    function openPriorityPopover(anchor, value, onChange) {
+        openPopover(anchor, (el, close) => {
+            el.appendChild(popLabel('Priority'));
+            el.appendChild(popSegmented(PRIORITY_OPTIONS, value, (v) => {
+                close();
+                onChange(v);
+            }));
+        }, { autofocus: false });
+    }
+
+    function openDatePopover(anchor, value, onChange) {
+        openPopover(anchor, (el, close) => {
+            el.appendChild(popLabel('Due date'));
+
+            const quick = document.createElement('div');
+            quick.className = 'pop-quick';
+            dateQuickPicks().forEach(({ label, ymd }) => {
+                quick.appendChild(popChip(label, () => { close(); onChange(ymd); }));
+            });
+            el.appendChild(quick);
+
+            const input = document.createElement('input');
+            input.type = 'date';
+            input.className = 'pop-input';
+            input.value = value || '';
+            input.addEventListener('change', () => {
+                close();
+                onChange(input.value || null);
+            });
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); close(); onChange(input.value || null); }
+            });
+
+            const row = popRow(input);
+            if (value) row.appendChild(popTextButton('Clear', () => { close(); onChange(null); }, { danger: true }));
+            el.appendChild(row);
+        }, { autofocus: false });
+    }
+
+    function openRepeatPopover(anchor, value, onChange) {
+        openPopover(anchor, (el, close) => {
+            el.appendChild(popLabel('Repeat'));
+
+            const current = value
+                ? (REPEAT_PRESETS.find(p => p.n === (value.n || 1) && p.unit === value.unit) || { label: 'Custom' }).label
+                : 'Off';
+
+            el.appendChild(popSegmented(
+                [['Off', 'Off'], ...REPEAT_PRESETS.map(p => [p.label, p.label])],
+                current,
+                (picked) => {
+                    close();
+                    if (picked === 'Off') return onChange(null);
+                    const preset = REPEAT_PRESETS.find(p => p.label === picked);
+                    onChange(preset ? { n: preset.n, unit: preset.unit } : null);
+                }
+            ));
+
+            el.appendChild(popSeparator());
+            el.appendChild(popLabel('Every'));
+
+            const n = document.createElement('input');
+            n.type = 'number';
+            n.min = '1';
+            n.className = 'pop-input pop-input--n';
+            n.value = value ? (value.n || 1) : '';
+            n.placeholder = '1';
+
+            const unit = document.createElement('select');
+            unit.className = 'pop-input';
+            ['days', 'weeks', 'months'].forEach(u => {
+                const opt = document.createElement('option');
+                opt.value = u;
+                opt.textContent = u.charAt(0).toUpperCase() + u.slice(1);
+                opt.selected = value ? value.unit === u : u === 'weeks';
+                unit.appendChild(opt);
+            });
+
+            const commit = () => {
+                const count = parseInt(n.value, 10);
+                close();
+                onChange(!count || count < 1 ? null : { n: count, unit: unit.value });
+            };
+            n.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } });
+            n.addEventListener('change', commit);
+            unit.addEventListener('change', () => { if (parseInt(n.value, 10) >= 1) commit(); });
+
+            el.appendChild(popRow(n, unit));
+        }, { autofocus: false });
+    }
+
+    function openReminderPopover(anchor, value, fallbackYMD, onChange) {
+        openPopover(anchor, (el, close) => {
+            el.appendChild(popLabel('Remind me'));
+
+            const dateInput = document.createElement('input');
+            dateInput.type = 'date';
+            dateInput.className = 'pop-input';
+            dateInput.value = value ? String(value).slice(0, 10) : (fallbackYMD || todayYMD());
+
+            const timeInput = document.createElement('input');
+            timeInput.type = 'time';
+            timeInput.className = 'pop-input';
+            timeInput.value = value ? String(value).slice(11, 16) : '09:00';
+
+            // A reminder is a local wall-clock string, never an instant. See
+            // planner-logic.js for why this is never routed through a Date.
+            const commit = () => {
+                const d = dateInput.value;
+                const t = timeInput.value;
+                close();
+                onChange(d && t ? `${d}T${t}` : null);
+            };
+            [dateInput, timeInput].forEach(inp => {
+                inp.addEventListener('change', commit);
+                inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } });
+            });
+
+            el.appendChild(popRow(dateInput, timeInput));
+
+            const actions = popRow();
+            if (value) actions.appendChild(popTextButton('Clear reminder', () => { close(); onChange(null); }, { danger: true }));
+            if (actions.children.length) el.appendChild(actions);
+
+            if ('Notification' in window && Notification.permission === 'denied') {
+                const note = document.createElement('p');
+                note.className = 'pop-note';
+                note.textContent = 'Notifications are blocked for this site, so this reminder can only show while the planner is open.';
+                el.appendChild(note);
+            }
+
+            requestNotifPermission();
+        }, { autofocus: false });
+    }
 
     // Navigation: show/hide pages and set active link
     const links = document.querySelectorAll('.nav-link[data-target]');
@@ -376,22 +754,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     });
                     li.appendChild(cb);
                     li.appendChild(lbl);
-                    // importance dropdown
-                    const impSelect = document.createElement('select');
-                    impSelect.className = 'task-importance-select';
-                    impSelect.dataset.id = task.id;
-                    const noneOpt = document.createElement('option'); noneOpt.value = ''; noneOpt.textContent = 'None'; noneOpt.selected = !task.importance; impSelect.appendChild(noneOpt);
-                    const highOpt = document.createElement('option'); highOpt.value = 'high'; highOpt.textContent = 'High'; highOpt.selected = task.importance === 'high'; impSelect.appendChild(highOpt);
-                    const medOpt = document.createElement('option'); medOpt.value = 'med'; medOpt.textContent = 'Med'; medOpt.selected = task.importance === 'med'; impSelect.appendChild(medOpt);
-                    const lowOpt = document.createElement('option'); lowOpt.value = 'low'; lowOpt.textContent = 'Low'; lowOpt.selected = task.importance === 'low'; impSelect.appendChild(lowOpt);
-                    impSelect.addEventListener('change', (e) => {
-                        const newImp = e.target.value || null;
-                        task.importance = newImp;
+                    // Same priority chip the task list uses, rather than a
+                    // second native <select> with its own four <option>s.
+                    li.appendChild(priorityChip(task.importance, (v) => {
+                        task.importance = v;
                         saveTasks();
                         renderTasks();
                         renderDayTasks();
-                    });
-                    li.appendChild(impSelect);
+                    }));
                 } else {
                     const subtask = item.subtask;
                     li.className = 'day-task-item day-subtask-item' + (subtask.completed ? ' completed' : '');
@@ -417,22 +787,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     li.appendChild(cb);
                     li.appendChild(typeBadge);
                     li.appendChild(lbl);
-                    const impSelect = document.createElement('select');
-                    impSelect.className = 'task-importance-select';
-                    impSelect.dataset.parentTaskId = item.task.id;
-                    impSelect.dataset.subtaskId = subtask.id;
-                    const noneOpt = document.createElement('option'); noneOpt.value = ''; noneOpt.textContent = 'None'; noneOpt.selected = !subtask.importance; impSelect.appendChild(noneOpt);
-                    const highOpt = document.createElement('option'); highOpt.value = 'high'; highOpt.textContent = 'High'; highOpt.selected = subtask.importance === 'high'; impSelect.appendChild(highOpt);
-                    const medOpt = document.createElement('option'); medOpt.value = 'med'; medOpt.textContent = 'Med'; medOpt.selected = subtask.importance === 'med'; impSelect.appendChild(medOpt);
-                    const lowOpt = document.createElement('option'); lowOpt.value = 'low'; lowOpt.textContent = 'Low'; lowOpt.selected = subtask.importance === 'low'; impSelect.appendChild(lowOpt);
-                    impSelect.addEventListener('change', (e) => {
-                        const newImp = e.target.value || null;
-                        subtask.importance = newImp;
+                    li.appendChild(priorityChip(subtask.importance, (v) => {
+                        subtask.importance = v;
                         saveTasks();
                         renderTasks();
                         renderDayTasks();
-                    });
-                    li.appendChild(impSelect);
+                    }));
                 }
                 ul.appendChild(li);
             });
@@ -460,25 +820,51 @@ document.addEventListener('DOMContentLoaded', () => {
         dayTasksEl.appendChild(container);
     }
 
+    /**
+     * Every open task and subtask, dated or not, sorted by due date with the
+     * undated ones last.
+     *
+     * Undated work used to be dropped here, by requiring `task.dueDate`. That
+     * made it invisible on the Home summary -- a task with no date existed
+     * only on the Tasks page, which is exactly the kind of thing a planner is
+     * meant not to lose.
+     */
     function getUpcomingTasks() {
         const todayYMD = ymdFromDate(new Date());
         const all = [];
 
         tasks.forEach(task => {
-            if (task.dueDate && !task.completed) {
-                all.push({ id: task.id, title: task.text, dueDate: task.dueDate, type: 'Task', importance: task.importance, overdue: task.dueDate < todayYMD });
+            if (!task.completed) {
+                all.push({
+                    id: task.id,
+                    title: task.text,
+                    dueDate: task.dueDate || null,
+                    type: 'Task',
+                    importance: task.importance,
+                    overdue: !!task.dueDate && task.dueDate < todayYMD,
+                });
             }
             if (task.subtasks && task.subtasks.length) {
                 task.subtasks.forEach(subtask => {
-                    if (subtask.dueDate && !subtask.completed) {
-                        all.push({ id: task.id, title: `${task.text} → ${subtask.text}`, dueDate: subtask.dueDate, type: 'Subtask', importance: subtask.importance, overdue: subtask.dueDate < todayYMD });
+                    if (!subtask.completed) {
+                        all.push({
+                            id: task.id,
+                            title: `${task.text} → ${subtask.text}`,
+                            dueDate: subtask.dueDate || null,
+                            type: 'Subtask',
+                            importance: subtask.importance,
+                            overdue: !!subtask.dueDate && subtask.dueDate < todayYMD,
+                        });
                     }
                 });
             }
         });
 
         return all.sort((a, b) => {
-            if (a.dueDate !== b.dueDate) return a.dueDate.localeCompare(b.dueDate);
+            // Undated last. Comparing a null date as a string would sort it
+            // among the real ones.
+            if (!a.dueDate !== !b.dueDate) return a.dueDate ? -1 : 1;
+            if (a.dueDate && a.dueDate !== b.dueDate) return a.dueDate.localeCompare(b.dueDate);
             return a.title.localeCompare(b.title);
         });
     }
@@ -534,14 +920,24 @@ document.addEventListener('DOMContentLoaded', () => {
         weekFromNow.setDate(weekFromNow.getDate() + 7);
         const weekYMD = ymdFromDate(weekFromNow);
 
+        // Half-width boxes show three rows. The full-width No date box gets
+        // more, because it has the room and a backlog is the one list where
+        // seeing only the first three tells you least.
         const PER_BOX_LIMIT = 3;
+        const WIDE_BOX_LIMIT = 6;
 
         const all = getUpcomingTasks();
+        // Every filter tests for a date first. Without that guard an undated
+        // item answers false to both `< today` and `> week`, so it would fall
+        // through all four boxes and vanish again.
         const buckets = [
-            { label: 'Overdue',   modifier: 'overdue', items: all.filter(i => i.dueDate < todayYMD) },
+            { label: 'Overdue',   modifier: 'overdue', items: all.filter(i => i.dueDate && i.dueDate < todayYMD) },
             { label: 'Today',     modifier: 'today',   items: all.filter(i => i.dueDate === todayYMD) },
-            { label: 'This week', modifier: '',        items: all.filter(i => i.dueDate > todayYMD && i.dueDate <= weekYMD) },
-            { label: 'Later',     modifier: '',        items: all.filter(i => i.dueDate > weekYMD) }
+            { label: 'This week', modifier: '',        items: all.filter(i => i.dueDate && i.dueDate > todayYMD && i.dueDate <= weekYMD) },
+            { label: 'Later',     modifier: '',        items: all.filter(i => i.dueDate && i.dueDate > weekYMD) },
+            // Label matches the Tasks page's own date grouping, so the
+            // "+N more" link below can scroll to the matching group header.
+            { label: 'No date',   modifier: 'nodate',  items: all.filter(i => !i.dueDate), wide: true }
         ];
 
         homeSummaryEl.innerHTML = '';
@@ -570,7 +966,8 @@ document.addEventListener('DOMContentLoaded', () => {
             // Colour modifier only when the box has tasks; empty boxes stay neutral/calm.
             card.className = 'home-summary-card'
                 + (hasItems && bucket.modifier ? ` home-summary-card--${bucket.modifier}` : '')
-                + (hasItems ? '' : ' home-summary-card--empty');
+                + (hasItems ? '' : ' home-summary-card--empty')
+                + (bucket.wide ? ' home-summary-card--wide' : '');
 
             const cardHeader = document.createElement('div');
             cardHeader.className = 'home-summary-card-header';
@@ -594,7 +991,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (hasItems) {
                 const list = document.createElement('ul');
                 list.className = 'home-summary-list';
-                bucket.items.slice(0, PER_BOX_LIMIT).forEach(item => {
+                const limit = bucket.wide ? WIDE_BOX_LIMIT : PER_BOX_LIMIT;
+                bucket.items.slice(0, limit).forEach(item => {
                     const li = document.createElement('li');
                     li.addEventListener('click', () => {
                         taskHighlightId = item.id;
@@ -608,20 +1006,25 @@ document.addEventListener('DOMContentLoaded', () => {
                     itemText.textContent = item.title;
                     itemText.title = item.title;
 
-                    const date = document.createElement('span');
-                    date.className = 'home-summary-date' + (item.overdue ? ' home-summary-date--overdue' : '');
-                    date.textContent = formatTaskDateDisplay(item.dueDate);
-
                     li.appendChild(itemText);
-                    li.appendChild(date);
+
+                    // Undated items are already under a box that says so, and
+                    // an empty date column just left a gap.
+                    if (item.dueDate) {
+                        const date = document.createElement('span');
+                        date.className = 'home-summary-date' + (item.overdue ? ' home-summary-date--overdue' : '');
+                        date.textContent = formatTaskDateDisplay(item.dueDate);
+                        li.appendChild(date);
+                    }
+
                     list.appendChild(li);
                 });
                 card.appendChild(list);
 
-                if (bucket.items.length > PER_BOX_LIMIT) {
+                if (bucket.items.length > limit) {
                     const more = document.createElement('p');
                     more.className = 'home-summary-more home-summary-more--link';
-                    more.textContent = `+${bucket.items.length - PER_BOX_LIMIT} more`;
+                    more.textContent = `+${bucket.items.length - limit} more`;
                     more.title = 'View all in Tasks';
                     more.addEventListener('click', () => {
                         taskGroupBy = 'date';
@@ -839,6 +1242,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderTasks() {
         if (!taskListEl) return;
+        // Every row is rebuilt, so anything anchored to one is about to be
+        // pointing at a detached element.
+        closePopover();
         taskListEl.innerHTML = '';
         const sorted = sortTasksBy(tasks, taskSortBy);
         const activeTasks = sorted.filter(t => !t.completed || recentlyCompleted.has(String(t.id)));
@@ -884,384 +1290,251 @@ document.addEventListener('DOMContentLoaded', () => {
         renderHomeSummary();
     }
 
-    function buildTaskLi(task) {
-        const li = document.createElement('li');
-        li.className = 'task-item';
-            if (task.completed) li.classList.add('completed');
-            if (task.importance === 'high') li.classList.add('importance-high');
-            else if (task.importance === 'low') li.classList.add('importance-low');
+    /* ─── Subtask disclosure ─────────────────────────────────────────────
+       Which tasks have their subtask panel shut. Held as the closed set, not
+       the open one, so a task with subtasks starts expanded: subtasks used to
+       be permanently visible, and collapsing is the new capability here, not
+       a new default.
 
-            // checkbox
-            const checkbox = document.createElement('input');
-            checkbox.type = 'checkbox';
-            checkbox.id = `task-${task.id}`;
-            checkbox.dataset.id = task.id;
-            checkbox.checked = !!task.completed;
-            checkbox.className = 'task-checkbox';
+       Not persisted on purpose. It is view state, and storing it would put a
+       field on every task record the API round-trips. */
+    const collapsedSubtasks = new Set();
 
-            // task name display (clicking now edits instead of toggling)
-            const label = document.createElement('span');
-            label.textContent = task.text;
-            label.className = 'task-label';
-            label.tabIndex = 0; // make keyboard-focusable
-            // clicking the name opens inline editor
-            label.addEventListener('click', () => {
-                startEditingTaskName(task, li);
-            });
-            label.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    startEditingTaskName(task, li);
-                }
-            });
+    function isSubtaskPanelOpen(taskId) { return !collapsedSubtasks.has(String(taskId)); }
 
-            li.appendChild(checkbox);
-            li.appendChild(label);
-            
-            // importance dropdown
-            const impSelect = document.createElement('select');
-            impSelect.className = 'task-importance-select';
-            impSelect.dataset.id = task.id;
-            
-            const noneOpt = document.createElement('option');
-            noneOpt.value = '';
-            noneOpt.textContent = 'None';
-            noneOpt.selected = !task.importance;
-            impSelect.appendChild(noneOpt);
-            
-            const highOpt = document.createElement('option');
-            highOpt.value = 'high';
-            highOpt.textContent = 'High';
-            highOpt.selected = task.importance === 'high';
-            impSelect.appendChild(highOpt);
-            
-            const medOpt = document.createElement('option');
-            medOpt.value = 'med';
-            medOpt.textContent = 'Med';
-            medOpt.selected = task.importance === 'med';
-            impSelect.appendChild(medOpt);
-            
-            const lowOpt = document.createElement('option');
-            lowOpt.value = 'low';
-            lowOpt.textContent = 'Low';
-            lowOpt.selected = task.importance === 'low';
-            impSelect.appendChild(lowOpt);
-            
-            impSelect.addEventListener('change', (e) => {
-                const newImp = e.target.value || null;
-                task.importance = newImp;
-                saveTasks();
-                renderTasks();
-            });
-            li.appendChild(impSelect);
-            
-            // date badge or 'add date' affordance
-            if (task.dueDate) {
-                const badge = document.createElement('span');
-                badge.className = 'task-date-badge';
-                badge.tabIndex = 0;
-                badge.title = parseDateYMD(task.dueDate).toLocaleDateString();
-                badge.textContent = formatTaskDateDisplay(task.dueDate);
-                
-                // Apply red color if task is overdue
-                if (isTaskOverdue(task)) {
-                    badge.style.color = '#ff6b6b';
-                }
-                
-                // click or Enter on badge to edit
-                badge.addEventListener('click', () => startEditingDate(task));
-                badge.addEventListener('keydown', (e) => { if (e.key === 'Enter') startEditingDate(task); });
-                li.appendChild(badge);
-            } else {
-                const add = document.createElement('button');
-                add.type = 'button';
-                add.className = 'task-date-add';
-                add.textContent = '+ Add date';
-                add.addEventListener('click', () => startEditingDate(task));
-                li.appendChild(add);
-            }
-            
-            // repeat button + popover
-            const repeatWrapper = document.createElement('span');
-            repeatWrapper.className = 'task-repeat-wrapper';
-
-            const repeatBtn = document.createElement('button');
-            repeatBtn.type = 'button';
-            repeatBtn.className = 'task-repeat-btn' + (task.repeat ? ' active' : '');
-            repeatBtn.textContent = '↻';
-            repeatBtn.title = task.repeat ? `Every ${task.repeat.n} ${task.repeat.unit}` : 'Set repeat';
-
-            const repeatPopover = document.createElement('div');
-            repeatPopover.className = 'task-repeat-popover hidden';
-
-            const repeatNInput = document.createElement('input');
-            repeatNInput.type = 'number';
-            repeatNInput.className = 'task-repeat-n';
-            repeatNInput.min = '1';
-            repeatNInput.placeholder = '1';
-            if (task.repeat) repeatNInput.value = task.repeat.n;
-
-            const repeatUnitSelect = document.createElement('select');
-            repeatUnitSelect.className = 'task-repeat-unit';
-            ['days', 'weeks', 'months'].forEach(unit => {
-                const opt = document.createElement('option');
-                opt.value = unit;
-                opt.textContent = unit.charAt(0).toUpperCase() + unit.slice(1);
-                opt.selected = task.repeat ? task.repeat.unit === unit : unit === 'days';
-                repeatUnitSelect.appendChild(opt);
-            });
-
-            function applyRepeat() {
-                const n = parseInt(repeatNInput.value, 10);
-                if (!n || n < 1) {
-                    task.repeat = null;
-                    repeatBtn.classList.remove('active');
-                    repeatBtn.title = 'Set repeat';
-                } else {
-                    task.repeat = { n, unit: repeatUnitSelect.value };
-                    repeatBtn.classList.add('active');
-                    repeatBtn.title = `Every ${n} ${repeatUnitSelect.value}`;
-                }
-                saveTasks();
-            }
-
-            repeatNInput.addEventListener('change', applyRepeat);
-            repeatUnitSelect.addEventListener('change', () => {
-                applyRepeat();
-                repeatPopover.classList.add('hidden');
-            });
-            repeatNInput.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') { e.preventDefault(); applyRepeat(); repeatPopover.classList.add('hidden'); }
-                if (e.key === 'Escape') repeatPopover.classList.add('hidden');
-            });
-
-            repeatBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                closeAllMenus();
-                repeatPopover.classList.toggle('hidden');
-                if (!repeatPopover.classList.contains('hidden')) repeatNInput.focus();
-            });
-
-            repeatPopover.addEventListener('click', (e) => e.stopPropagation());
-
-            repeatPopover.appendChild(repeatNInput);
-            repeatPopover.appendChild(repeatUnitSelect);
-            repeatWrapper.appendChild(repeatBtn);
-            repeatWrapper.appendChild(repeatPopover);
-            li.appendChild(repeatWrapper);
-
-            // bell button + reminder popover
-            const bellWrapper = document.createElement('span');
-            bellWrapper.className = 'task-bell-wrapper';
-
-            const bellBtn = document.createElement('button');
-            bellBtn.type = 'button';
-            bellBtn.className = 'task-bell-btn' + (task.reminder ? ' active' : '');
-            bellBtn.textContent = '🔔';
-            bellBtn.title = task.reminder
-                ? reminderLabel(task.reminder)
-                : 'Set reminder';
-
-            const bellPopover = document.createElement('div');
-            bellPopover.className = 'task-bell-popover hidden';
-
-            const reminderDateInput = document.createElement('input');
-            reminderDateInput.type = 'date';
-            reminderDateInput.className = 'task-reminder-date';
-            reminderDateInput.value = task.reminder ? task.reminder.slice(0, 10) : '';
-
-            const reminderTimeInput = document.createElement('input');
-            reminderTimeInput.type = 'time';
-            reminderTimeInput.className = 'task-reminder-time';
-            reminderTimeInput.value = task.reminder ? task.reminder.slice(11, 16) : '09:00';
-
-            const clearReminderBtn = document.createElement('button');
-            clearReminderBtn.type = 'button';
-            clearReminderBtn.className = 'task-reminder-clear';
-            clearReminderBtn.textContent = '✕';
-            clearReminderBtn.title = 'Clear reminder';
-
-            function applyReminder() {
-                const d = reminderDateInput.value;
-                const t = reminderTimeInput.value;
-                if (d && t) {
-                    task.reminder = `${d}T${t}`;
-                    task.reminderFired = false;
-                    bellBtn.classList.add('active');
-                    bellBtn.title = reminderLabel(task.reminder);
-                } else {
-                    task.reminder = null;
-                    task.reminderFired = false;
-                    bellBtn.classList.remove('active');
-                    bellBtn.title = 'Set reminder';
-                }
-                saveTasks();
-            }
-
-            reminderTimeInput.addEventListener('change', applyReminder);
-            reminderDateInput.addEventListener('change', applyReminder);
-            [reminderDateInput, reminderTimeInput].forEach(inp => {
-                inp.addEventListener('keydown', (e) => {
-                    if (e.key === 'Escape') bellPopover.classList.add('hidden');
-                });
-            });
-            clearReminderBtn.addEventListener('click', () => {
-                task.reminder = null;
-                task.reminderFired = false;
-                bellBtn.classList.remove('active');
-                bellBtn.title = 'Set reminder';
-                reminderDateInput.value = '';
-                saveTasks();
-                bellPopover.classList.add('hidden');
-            });
-
-            bellBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                closeAllMenus();
-                bellPopover.classList.toggle('hidden');
-                if (!bellPopover.classList.contains('hidden')) {
-                    if (!reminderDateInput.value) reminderDateInput.value = task.dueDate || todayYMD();
-                    requestNotifPermission();
-                    reminderDateInput.focus();
-                }
-            });
-            bellPopover.addEventListener('click', (e) => e.stopPropagation());
-
-            bellPopover.appendChild(reminderDateInput);
-            bellPopover.appendChild(reminderTimeInput);
-            bellPopover.appendChild(clearReminderBtn);
-            bellWrapper.appendChild(bellBtn);
-            bellWrapper.appendChild(bellPopover);
-            li.appendChild(bellWrapper);
-
-            // add subtask button
-            if (!task.subtasks) task.subtasks = [];
-            const addSubtaskBtn = document.createElement('button');
-            addSubtaskBtn.type = 'button';
-            addSubtaskBtn.className = 'add-subtask-btn-inline';
-            addSubtaskBtn.textContent = '+ Subtask';
-            addSubtaskBtn.addEventListener('click', () => {
-                startAddingSubtask(task.id, li);
-            });
-            li.appendChild(addSubtaskBtn);
-            
-            // three-dot menu button (at the end - rightmost)
-            const menuBtn = document.createElement('button');
-            menuBtn.type = 'button';
-            menuBtn.className = 'task-menu-btn';
-            menuBtn.textContent = '⋯';
-            menuBtn.title = 'More options';
-            
-            // create menu container
-            const menuContainer = document.createElement('div');
-            menuContainer.className = 'task-menu-container hidden';
-            
-            const editBtn = document.createElement('button');
-            editBtn.type = 'button';
-            editBtn.className = 'task-menu-option';
-            editBtn.textContent = 'Edit';
-            editBtn.addEventListener('click', () => {
-                closeAllMenus();
-                startEditingTaskName(task, li);
-            });
-            
-            const deleteBtn = document.createElement('button');
-            deleteBtn.type = 'button';
-            deleteBtn.className = 'task-menu-option delete-option';
-            deleteBtn.textContent = 'Delete';
-            deleteBtn.addEventListener('click', () => {
-                closeAllMenus();
-                deleteTask(task.id);
-            });
-            
-            menuContainer.appendChild(editBtn);
-            menuContainer.appendChild(deleteBtn);
-            
-            menuBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                closeAllMenus();
-                menuContainer.classList.remove('hidden');
-            });
-            
-            li.appendChild(menuBtn);
-            li.appendChild(menuContainer);
-            
-            // Draggable divider between task and subtasks
-            const divider = document.createElement('div');
-            divider.className = 'subtask-divider';
-            divider.dataset.taskId = task.id;
-            
-            // Only the mousedown lives on the element. The move and release
-            // handlers are registered once for the whole document (see
-            // activeDrag below): binding them here meant two new document
-            // listeners per task on every single re-render, none ever removed.
-            divider.addEventListener('mousedown', (e) => {
-                e.preventDefault();
-                activeDrag = {
-                    divider,
-                    container: subtasksContainer,
-                    startY: e.clientY,
-                    startHeight: subtasksContainer.offsetHeight,
-                };
-                divider.classList.add('dragging');
-                document.body.style.cursor = 'row-resize';
-                document.body.style.userSelect = 'none';
-            });
-
-            li.appendChild(divider);
-            
-            // Subtasks container (rendered below the main task row)
-            const subtasksContainer = document.createElement('div');
-            subtasksContainer.className = 'subtasks-container';
-            
-            // Render existing subtasks
-            task.subtasks.forEach(subtask => {
-                const subtaskEl = renderSubtask(subtask, task.id);
-                subtasksContainer.appendChild(subtaskEl);
-            });
-            
-            li.appendChild(subtasksContainer);
-            return li;
+    function setSubtaskPanelOpen(taskId, open) {
+        const key = String(taskId);
+        if (open) collapsedSubtasks.delete(key);
+        else collapsedSubtasks.add(key);
     }
 
-    function startEditingDate(task) {
-        // find the task's list item and replace the display with a date input
-        const li = taskListEl.querySelector(`input[data-id="${task.id}"]`)?.closest('.task-item');
-        if (!li) return;
-        const existingBadge = li.querySelector('.task-date-badge, .task-date-add');
-        const input = document.createElement('input');
-        input.type = 'date';
-        input.className = 'task-date-editor';
-        input.value = task.dueDate || '';
-        // replace badge/add-button with the editor
-        if (existingBadge) existingBadge.replaceWith(input);
-        input.focus();
+    /* ─── Chips ──────────────────────────────────────────────────────────
+       A chip states one property of a task, and is only drawn when that
+       property is set. Unset properties are added as dashed `ghost` chips:
+       they take up their space at all times so the row never reflows on
+       hover, but they are transparent and unclickable until the row is
+       hovered, and permanently visible where there is no hover at all. */
+    function buildChip({ iconName, text, classes = [], ghost = false, title, expanded = null, onClick }) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = ['chip', ...classes, ghost ? 'chip--ghost' : ''].filter(Boolean).join(' ');
+        if (iconName) b.appendChild(icon(iconName));
+        const span = document.createElement('span');
+        span.textContent = text;
+        b.appendChild(span);
+        if (title) b.title = title;
+        if (expanded !== null) b.setAttribute('aria-expanded', String(expanded));
+        b.addEventListener('click', () => onClick(b));
+        return b;
+    }
 
-        let settled = false;
+    function moreButton(label) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'task-more';
+        b.title = label;
+        b.setAttribute('aria-label', label);
+        b.setAttribute('aria-expanded', 'false');
+        b.appendChild(icon('more'));
+        return b;
+    }
 
-        function commit() {
-            if (settled) return;
-            settled = true;
-            const val = input.value || null;
-            tasks = tasks.map(t => t.id === task.id ? Object.assign({}, t, { dueDate: val }) : t);
+    function priorityChip(value, onChange) {
+        return buildChip({
+            iconName: 'flag',
+            text: value ? (PRIORITY_LABEL[value] || value) : 'Priority',
+            classes: value ? [`chip--${value}`] : [],
+            ghost: !value,
+            title: value ? `Priority: ${PRIORITY_LABEL[value] || value}` : 'Set a priority',
+            onClick: (b) => openPriorityPopover(b, value, onChange),
+        });
+    }
+
+    function dueDateChip(ymd, overdue, onChange) {
+        const classes = [];
+        if (overdue) classes.push('chip--overdue');
+        else if (ymd && ymd === todayYMD()) classes.push('chip--today');
+
+        const full = ymd ? parseDateYMD(ymd) : null;
+        return buildChip({
+            iconName: 'calendar',
+            text: ymd ? formatTaskDateDisplay(ymd) : 'Due',
+            classes,
+            ghost: !ymd,
+            title: full
+                ? `${overdue ? 'Overdue: due ' : 'Due '}${full.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}`
+                : 'Set a due date',
+            onClick: (b) => openDatePopover(b, ymd, onChange),
+        });
+    }
+
+    function repeatChip(repeat, onChange) {
+        const label = repeatLabel(repeat);
+        return buildChip({
+            iconName: 'repeat',
+            text: label || 'Repeat',
+            classes: label ? ['chip--set'] : [],
+            ghost: !label,
+            title: label ? `Repeats ${label.toLowerCase()}` : 'Make this repeat',
+            onClick: (b) => openRepeatPopover(b, repeat, onChange),
+        });
+    }
+
+    function reminderChip(reminder, fallbackYMD, onChange) {
+        const label = reminderChipLabel(reminder);
+        return buildChip({
+            iconName: 'bell',
+            text: label || 'Remind',
+            classes: label ? ['chip--set'] : [],
+            ghost: !label,
+            title: label ? reminderLabel(reminder) : 'Set a reminder',
+            onClick: (b) => openReminderPopover(b, reminder, fallbackYMD, onChange),
+        });
+    }
+
+    /* ─── A task row ─────────────────────────────────────────────────────
+       Three grid columns: checkbox, body, "⋯". Because they are grid tracks
+       and not flex items, the checkbox and the "⋯" line up down the whole
+       list however long a title runs. The old row was a flex bag with
+       `margin-left: auto` on the priority select, so every control sat at a
+       different x depending on the length of the text beside it. */
+    function buildTaskLi(task) {
+        if (!task.subtasks) task.subtasks = [];
+
+        const li = document.createElement('li');
+        li.className = 'task-item';
+        li.dataset.id = task.id;
+        if (task.completed) li.classList.add('completed');
+        if (task.importance) li.classList.add(`importance-${task.importance}`);
+
+        // Applied to the task and then re-rendered, which is how every other
+        // edit in this file works.
+        const update = (patch) => {
+            Object.assign(task, patch);
             saveTasks();
             renderTasks();
             renderCalendar();
             renderDayTasks();
-        }
+        };
 
-        function cancel() {
-            if (settled) return;
-            settled = true;
-            renderTasks();
-        }
+        // ── checkbox
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.id = `task-${task.id}`;
+        checkbox.dataset.id = task.id;
+        checkbox.checked = !!task.completed;
+        checkbox.className = 'task-checkbox';
+        checkbox.setAttribute('aria-label', `Mark "${task.text}" ${task.completed ? 'not done' : 'done'}`);
+        li.appendChild(checkbox);
 
-        input.addEventListener('blur', commit);
-        input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') { e.preventDefault(); commit(); }
-            if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+        // ── title
+        const body = document.createElement('div');
+        body.className = 'task-body';
+
+        const label = document.createElement('span');
+        label.className = 'task-label';
+        label.textContent = task.text;
+        label.tabIndex = 0;
+        label.title = 'Click to rename';
+        label.addEventListener('click', () => startEditingTaskName(task, li));
+        label.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); startEditingTaskName(task, li); }
         });
+        body.appendChild(label);
+
+        // ── chips
+        const chips = document.createElement('div');
+        chips.className = 'task-chips';
+        chips.appendChild(priorityChip(task.importance, (v) => update({ importance: v })));
+        chips.appendChild(dueDateChip(task.dueDate, isTaskOverdue(task), (v) => update({ dueDate: v })));
+        chips.appendChild(repeatChip(task.repeat, (v) => update({ repeat: v })));
+        chips.appendChild(reminderChip(task.reminder, task.dueDate, (v) => update({ reminder: v, reminderFired: false })));
+
+        const subtaskPanel = document.createElement('div');
+        subtaskPanel.className = 'subtasks';
+
+        if (task.subtasks.length) {
+            const done = task.subtasks.filter(s => s.completed).length;
+            const open = isSubtaskPanelOpen(task.id);
+            const countChip = buildChip({
+                iconName: 'chevron',
+                text: `${done}/${task.subtasks.length}`,
+                classes: ['chip--count'],
+                expanded: open,
+                title: open ? 'Hide subtasks' : 'Show subtasks',
+                // Toggled in place. Re-rendering the list to open a disclosure
+                // would throw away the scroll position and every hover state.
+                onClick: (b) => {
+                    const nowOpen = !isSubtaskPanelOpen(task.id);
+                    setSubtaskPanelOpen(task.id, nowOpen);
+                    subtaskPanel.hidden = !nowOpen;
+                    b.setAttribute('aria-expanded', String(nowOpen));
+                    b.title = nowOpen ? 'Hide subtasks' : 'Show subtasks';
+                },
+            });
+            chips.appendChild(countChip);
+        }
+
+        body.appendChild(chips);
+        li.appendChild(body);
+
+        // ── "⋯". Every property is reachable from here as well as from its
+        // chip, so nothing depends on hover being available.
+        const menuBtn = moreButton('Task actions');
+        menuBtn.addEventListener('click', () => {
+            openPopover(menuBtn, (el, close) => {
+                el.appendChild(popItem('calendar', 'Due date', () => {
+                    close();
+                    openDatePopover(menuBtn, task.dueDate, (v) => update({ dueDate: v }));
+                }, { value: task.dueDate ? formatTaskDateDisplay(task.dueDate) : null }));
+
+                el.appendChild(popItem('flag', 'Priority', () => {
+                    close();
+                    openPriorityPopover(menuBtn, task.importance, (v) => update({ importance: v }));
+                }, { value: task.importance ? PRIORITY_LABEL[task.importance] : null }));
+
+                el.appendChild(popItem('bell', 'Reminder', () => {
+                    close();
+                    openReminderPopover(menuBtn, task.reminder, task.dueDate, (v) => update({ reminder: v, reminderFired: false }));
+                }, { value: reminderChipLabel(task.reminder) }));
+
+                el.appendChild(popItem('repeat', 'Repeat', () => {
+                    close();
+                    openRepeatPopover(menuBtn, task.repeat, (v) => update({ repeat: v }));
+                }, { value: repeatLabel(task.repeat) }));
+
+                el.appendChild(popSeparator());
+
+                el.appendChild(popItem('plus', 'Add subtask', () => {
+                    close();
+                    setSubtaskPanelOpen(task.id, true);
+                    subtaskPanel.hidden = false;
+                    startAddingSubtask(task.id, li);
+                }));
+
+                el.appendChild(popItem('pencil', 'Rename', () => {
+                    close();
+                    startEditingTaskName(task, li);
+                }));
+
+                el.appendChild(popSeparator());
+
+                el.appendChild(popItem('trash', 'Delete task', () => {
+                    close();
+                    confirmDelete('Delete task?', `"${task.text}" and its subtasks will be removed. This cannot be undone.`, () => deleteTask(task.id));
+                }, { danger: true }));
+            }, { align: 'end' });
+        });
+        li.appendChild(menuBtn);
+
+        // ── subtasks
+        task.subtasks.forEach(subtask => subtaskPanel.appendChild(renderSubtask(subtask, task.id)));
+        subtaskPanel.hidden = !task.subtasks.length || !isSubtaskPanelOpen(task.id);
+        li.appendChild(subtaskPanel);
+
+        return li;
     }
+
 
     function startEditingTaskName(task, liElement) {
         const label = liElement.querySelector('.task-label');
@@ -1384,137 +1657,93 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderSubtask(subtask, parentTaskId) {
-        const subtaskEl = document.createElement('div');
-        subtaskEl.className = 'subtask-item';
-        if (subtask.completed) subtaskEl.classList.add('completed');
-        if (subtask.importance === 'high') subtaskEl.classList.add('importance-high');
-        else if (subtask.importance === 'low') subtaskEl.classList.add('importance-low');
-        subtaskEl.dataset.subtaskId = subtask.id;
-        
+        const el = document.createElement('div');
+        el.className = 'subtask-item';
+        if (subtask.completed) el.classList.add('completed');
+        if (subtask.importance) el.classList.add(`importance-${subtask.importance}`);
+        el.dataset.subtaskId = subtask.id;
+
+        const update = (patch) => {
+            Object.assign(subtask, patch);
+            saveTasks();
+            renderTasks();
+            renderCalendar();
+            renderDayTasks();
+        };
+
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
         checkbox.className = 'subtask-checkbox';
         checkbox.checked = !!subtask.completed;
+        checkbox.setAttribute('aria-label', `Mark "${subtask.text}" ${subtask.completed ? 'not done' : 'done'}`);
         checkbox.addEventListener('change', () => {
             toggleSubtask(parentTaskId, subtask.id, checkbox.checked);
         });
-        
+        el.appendChild(checkbox);
+
+        const body = document.createElement('div');
+        body.className = 'subtask-body';
+
         const label = document.createElement('span');
         label.className = 'subtask-label';
         label.textContent = subtask.text;
         label.tabIndex = 0;
-        label.addEventListener('click', () => {
-            startEditingSubtaskName(parentTaskId, subtask, subtaskEl);
-        });
+        label.title = 'Click to rename';
+        label.addEventListener('click', () => startEditingSubtaskName(parentTaskId, subtask, el));
         label.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                startEditingSubtaskName(parentTaskId, subtask, subtaskEl);
-            }
+            if (e.key === 'Enter') { e.preventDefault(); startEditingSubtaskName(parentTaskId, subtask, el); }
         });
-        
-        // importance dropdown
-        const impSelect = document.createElement('select');
-        impSelect.className = 'subtask-importance-select';
-        impSelect.dataset.id = subtask.id;
-        
-        const noneOpt = document.createElement('option');
-        noneOpt.value = '';
-        noneOpt.textContent = 'None';
-        noneOpt.selected = !subtask.importance;
-        impSelect.appendChild(noneOpt);
-        
-        const highOpt = document.createElement('option');
-        highOpt.value = 'high';
-        highOpt.textContent = 'High';
-        highOpt.selected = subtask.importance === 'high';
-        impSelect.appendChild(highOpt);
-        
-        const medOpt = document.createElement('option');
-        medOpt.value = 'med';
-        medOpt.textContent = 'Med';
-        medOpt.selected = subtask.importance === 'med';
-        impSelect.appendChild(medOpt);
-        
-        const lowOpt = document.createElement('option');
-        lowOpt.value = 'low';
-        lowOpt.textContent = 'Low';
-        lowOpt.selected = subtask.importance === 'low';
-        impSelect.appendChild(lowOpt);
-        
-        impSelect.addEventListener('change', (e) => {
-            const newImp = e.target.value || null;
-            updateSubtaskImportance(parentTaskId, subtask.id, newImp);
+        body.appendChild(label);
+
+        // A subtask carries a due date and a priority, and nothing else. No
+        // repeat and no reminder, which is what the record has always held.
+        const chips = document.createElement('div');
+        chips.className = 'task-chips';
+        const overdue = !subtask.completed && !!subtask.dueDate && subtask.dueDate < todayYMD();
+        chips.appendChild(dueDateChip(subtask.dueDate, overdue, (v) => update({ dueDate: v })));
+        chips.appendChild(priorityChip(subtask.importance, (v) => update({ importance: v })));
+        body.appendChild(chips);
+
+        el.appendChild(body);
+
+        const menuBtn = moreButton('Subtask actions');
+        menuBtn.addEventListener('click', () => {
+            openPopover(menuBtn, (pop, close) => {
+                pop.appendChild(popItem('calendar', 'Due date', () => {
+                    close();
+                    openDatePopover(menuBtn, subtask.dueDate, (v) => update({ dueDate: v }));
+                }, { value: subtask.dueDate ? formatTaskDateDisplay(subtask.dueDate) : null }));
+
+                pop.appendChild(popItem('flag', 'Priority', () => {
+                    close();
+                    openPriorityPopover(menuBtn, subtask.importance, (v) => update({ importance: v }));
+                }, { value: subtask.importance ? PRIORITY_LABEL[subtask.importance] : null }));
+
+                pop.appendChild(popSeparator());
+
+                pop.appendChild(popItem('pencil', 'Rename', () => {
+                    close();
+                    startEditingSubtaskName(parentTaskId, subtask, el);
+                }));
+
+                pop.appendChild(popItem('trash', 'Delete subtask', () => {
+                    close();
+                    confirmDelete('Delete subtask?', `"${subtask.text}" will be removed. This cannot be undone.`, () => deleteSubtask(parentTaskId, subtask.id));
+                }, { danger: true }));
+            }, { align: 'end' });
         });
-        
-        // date badge or 'add date' affordance
-        let dateElement;
-        if (subtask.dueDate) {
-            const badge = document.createElement('span');
-            badge.className = 'subtask-date-badge';
-            badge.title = parseDateYMD(subtask.dueDate).toLocaleDateString();
-            badge.textContent = formatTaskDateDisplay(subtask.dueDate);
-            badge.addEventListener('click', () => startEditingSubtaskDate(parentTaskId, subtask.id, subtaskEl));
-            dateElement = badge;
-        } else {
-            const add = document.createElement('button');
-            add.type = 'button';
-            add.className = 'subtask-date-add';
-            add.textContent = '+ Date';
-            add.addEventListener('click', () => startEditingSubtaskDate(parentTaskId, subtask.id, subtaskEl));
-            dateElement = add;
-        }
-        
-        // three-dot menu button for subtask
-        const menuBtn = document.createElement('button');
-        menuBtn.type = 'button';
-        menuBtn.className = 'subtask-menu-btn';
-        menuBtn.textContent = '⋯';
-        menuBtn.title = 'More options';
-        
-        // create menu container
-        const menuContainer = document.createElement('div');
-        menuContainer.className = 'subtask-menu-container hidden';
-        
-        const editBtn = document.createElement('button');
-        editBtn.type = 'button';
-        editBtn.className = 'subtask-menu-option';
-        editBtn.textContent = 'Edit';
-        editBtn.addEventListener('click', () => {
-            closeAllMenus();
-            startEditingSubtaskName(parentTaskId, subtask, subtaskEl);
-        });
-        
-        const deleteBtn = document.createElement('button');
-        deleteBtn.type = 'button';
-        deleteBtn.className = 'subtask-menu-option delete-option';
-        deleteBtn.textContent = 'Delete';
-        deleteBtn.addEventListener('click', () => {
-            closeAllMenus();
-            deleteSubtask(parentTaskId, subtask.id);
-        });
-        
-        menuContainer.appendChild(editBtn);
-        menuContainer.appendChild(deleteBtn);
-        
-        menuBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            closeAllMenus();
-            menuContainer.classList.remove('hidden');
-        });
-        
-        subtaskEl.appendChild(checkbox);
-        subtaskEl.appendChild(label);
-        subtaskEl.appendChild(impSelect);
-        subtaskEl.appendChild(dateElement);
-        subtaskEl.appendChild(menuBtn);
-        subtaskEl.appendChild(menuContainer);
-        
-        return subtaskEl;
+        el.appendChild(menuBtn);
+
+        return el;
     }
 
     function startAddingSubtask(parentTaskId, taskItemEl) {
-        const subtasksContainer = taskItemEl.querySelector('.subtasks-container');
+        const subtasksContainer = taskItemEl.querySelector('.subtasks');
+        if (!subtasksContainer) return;
+        // A task with no subtasks yet has its panel hidden, so the input would
+        // otherwise be typed into blind.
+        setSubtaskPanelOpen(parentTaskId, true);
+        subtasksContainer.hidden = false;
         const input = document.createElement('input');
         input.type = 'text';
         input.placeholder = 'New subtask...';
@@ -1591,44 +1820,6 @@ document.addEventListener('DOMContentLoaded', () => {
         renderTasks();
     }
 
-    function startEditingSubtaskDate(parentTaskId, subtaskId, subtaskEl) {
-        const parentTask = tasks.find(t => String(t.id) === String(parentTaskId));
-        if (!parentTask) return;
-        
-        const subtask = parentTask.subtasks.find(st => String(st.id) === String(subtaskId));
-        if (!subtask) return;
-        
-        const existingDateEl = subtaskEl.querySelector('.subtask-date-badge, .subtask-date-add');
-        const input = document.createElement('input');
-        input.type = 'date';
-        input.className = 'subtask-date-editor';
-        input.value = subtask.dueDate || '';
-        
-        if (existingDateEl) existingDateEl.replaceWith(input);
-        input.focus();
-        
-        let settled = false;
-
-        function commit() {
-            if (settled) return;
-            settled = true;
-            subtask.dueDate = input.value || null;
-            saveTasks();
-            renderTasks();
-        }
-
-        function cancel() {
-            if (settled) return;
-            settled = true;
-            renderTasks();
-        }
-        
-        input.addEventListener('blur', commit);
-        input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') { e.preventDefault(); commit(); }
-            if (e.key === 'Escape') { e.preventDefault(); cancel(); }
-        });
-    }
 
     function deleteSubtask(parentTaskId, subtaskId) {
         const parentTask = tasks.find(t => String(t.id) === String(parentTaskId));
