@@ -45,6 +45,12 @@
 
   /* Group-header glow highlight */
   --glow-highlight: rgba(253, 197, 0, 0.28);
+  /* The glow on a row jumped to from Home. Priority's colour where there is
+     one, so the highlight says something as well as pointing. */
+  --flash-none: rgba(37, 99, 235, 0.55);
+  --flash-high: rgba(239, 68, 68, 0.6);
+  --flash-med: rgba(234, 179, 8, 0.65);
+  --flash-low: rgba(37, 99, 235, 0.55);
   --glow-text: #92720a;
 }
 
@@ -81,6 +87,10 @@ html.dark {
   --caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'%3E%3Cpath fill='%238ba5c5' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
 
   --glow-highlight: rgba(37, 99, 235, 0.18);
+  --flash-none: rgba(96, 165, 250, 0.6);
+  --flash-high: rgba(248, 113, 113, 0.6);
+  --flash-med: rgba(250, 204, 21, 0.6);
+  --flash-low: rgba(96, 165, 250, 0.6);
   --glow-text: #93c5fd;
 }
 
@@ -940,17 +950,20 @@ html.dark .calendar-day.tasks-completed {
   padding-right: 6px;
 }
 
-/* One short pulse when a row is jumped to from Home, and nothing more.
+/* One short glow when a row is jumped to from Home, and nothing more.
    Written as a class the script adds and removes rather than an animation,
    because the reduced-motion rules below cut every animation on this page to
    0.01ms -- which made the old flash invisible on exactly the machines that
-   most need a clear landing mark. */
+   most need a clear landing mark. Only a blurred shadow: a border or a
+   background swap reads as the row changing state, not as a highlight. */
 .task-list .task-item.task-item--flash {
-  background: var(--bg-card);
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--ring);
+  box-shadow: 0 0 18px 4px var(--flash-color, var(--flash-none));
   z-index: 1;
 }
+
+.task-item--flash.importance-high { --flash-color: var(--flash-high); }
+.task-item--flash.importance-med  { --flash-color: var(--flash-med); }
+.task-item--flash.importance-low  { --flash-color: var(--flash-low); }
 
 /* ─── The row ─── */
 
@@ -959,7 +972,6 @@ html.dark .calendar-day.tasks-completed {
   grid-template-columns: 16px 18px minmax(0, 1fr) auto auto;
   grid-template-areas:
     "grip check body date more"
-    ".    .     note note note"
     ".    .     subs subs subs";
   align-items: start;
   column-gap: 12px;
@@ -1229,6 +1241,8 @@ html.dark .calendar-day.tasks-completed {
 
 .task-item:hover > .task-due,
 .task-item:focus-within > .task-due,
+.subtask-item:hover > .task-drag { opacity: 0.55; }
+
 .subtask-item:hover > .task-due,
 .subtask-item:focus-within > .task-due { opacity: 1; }
 
@@ -1276,13 +1290,6 @@ html.dark .calendar-day.tasks-completed {
    Hidden until the title is clicked. A paragraph of context on every row
    would turn a list you scan into a wall you read, which is why the row shows
    only that a note exists. */
-.task-note {
-  grid-area: note;
-  margin: 8px 0 2px;
-}
-
-.task-note[hidden] { display: none; }
-
 .task-note-box {
   width: 100%;
   resize: vertical;
@@ -1342,10 +1349,14 @@ html.dark .calendar-day.tasks-completed {
 
 @media (hover: none) { .task-more { opacity: 1; } }
 
-/* ─── Inline editors ─── */
+/* ─── The new-subtask box ───
+   The new-task box in miniature. It sits where a subtask row would, so its
+   two buttons are smaller than the ones in the full-width box above. */
+.task-entry-field--sub { margin-bottom: 4px; }
+.task-entry-field--sub .task-entry-btn { height: 22px; font-size: 0.74rem; }
+.task-entry-field--sub .task-entry-btn > svg { width: 12px; height: 12px; }
+.task-entry-field--sub .subtask-input { padding-right: 128px; }
 
-.task-name-editor,
-.subtask-name-editor,
 .subtask-input {
   width: 100%;
   padding: 4px 8px;
@@ -1378,9 +1389,7 @@ html.dark .calendar-day.tasks-completed {
 .pop-date-btn:hover { border-color: var(--border-strong); color: var(--accent); }
 .pop-date-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring); }
 
-.subtask-name-editor, .subtask-input { font-size: 0.87rem; }
-.task-name-editor:focus,
-.subtask-name-editor:focus,
+.subtask-input { font-size: 0.87rem; }
 .subtask-input:focus { outline: none; box-shadow: 0 0 0 3px var(--ring); }
 
 /* ─── Subtasks ─── */
@@ -1399,8 +1408,8 @@ html.dark .calendar-day.tasks-completed {
 
 .subtask-item {
   display: grid;
-  grid-template-columns: 15px minmax(0, 1fr) auto auto;
-  grid-template-areas: "check body date more";
+  grid-template-columns: 14px 15px minmax(0, 1fr) auto auto;
+  grid-template-areas: "grip check body date more";
   align-items: start;
   column-gap: 10px;
   padding: 6px 8px 6px 10px;
@@ -1625,7 +1634,192 @@ select.pop-input {
   .task-label::after, .subtask-label::after,
   .chip--count svg { transition: none; }
   .task-group-header--glow { animation-duration: 0.01ms; }
+  /* Deliberately left on. A glow that fades up and down is a colour change,
+     not motion, and without the fade the highlight snaps on and off -- which
+     is what made it read as a border appearing rather than a flash. */
+  .task-item { transition: box-shadow 0.32s ease; }
 }
+
+/* ─── Task detail ───
+   One task in full, down the right-hand side. Fixed rather than a column in
+   the page grid, so opening it never reflows the list underneath: the row you
+   clicked stays exactly where you left it. */
+.task-detail {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(380px, 100vw);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  padding: 16px 18px 24px;
+  background: var(--bg-card);
+  border-left: 1px solid var(--border);
+  box-shadow: -8px 0 28px rgba(0, 0, 0, 0.12);
+}
+
+.task-detail[hidden] { display: none; }
+
+html.dark .task-detail { box-shadow: -8px 0 28px rgba(0, 0, 0, 0.45); }
+
+/* Only earns its keep on a narrow screen, where the panel is the whole width.
+   On a wide one the list stays visible and usable behind the panel. */
+.task-detail-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.task-detail-scrim[hidden] { display: none; }
+
+@media (min-width: 900px) {
+  .task-detail-scrim { display: none; }
+}
+
+.task-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.task-detail-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background-color 0.13s ease, color 0.13s ease;
+}
+
+.task-detail-close > svg { width: 17px; height: 17px; }
+.task-detail-close:hover { background: var(--bg-surface); color: var(--text); }
+.task-detail-close:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring); }
+
+.task-detail-title {
+  margin: 0 0 6px;
+  font-size: 1.12rem;
+  font-weight: 650;
+  line-height: 1.35;
+  color: var(--text);
+  border-radius: 6px;
+  padding: 2px 4px;
+  margin-left: -4px;
+}
+
+.task-detail-title:focus {
+  outline: none;
+  background: var(--bg-input);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+.task-detail-section { margin-top: 14px; }
+
+.task-detail-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 7px;
+}
+
+.task-detail-props {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+/* In the panel there is no row to reveal on hover, so nothing is faint. */
+.task-detail-props .chip--ghost,
+.task-detail-props .task-due--unset { opacity: 1; }
+
+.task-detail-props .chip--ghost { border-color: var(--border); border-style: dashed; }
+
+.task-detail-props .task-due {
+  grid-area: auto;
+  justify-self: auto;
+  margin-right: 0;
+  padding: 0 9px;
+  height: 23px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-surface);
+}
+
+/* The subtask rows keep the shape they have in the list, minus the indent
+   rule that only makes sense hanging off a parent row. */
+.subtasks--detail {
+  margin: 0;
+  padding-left: 0;
+  border-left: 0;
+}
+
+.task-detail-add,
+.task-detail-delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 9px;
+  padding: 7px 11px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.83rem;
+  cursor: pointer;
+  transition: background-color 0.13s ease, color 0.13s ease, border-color 0.13s ease;
+}
+
+.task-detail-add > svg,
+.task-detail-delete > svg { width: 14px; height: 14px; }
+
+.task-detail-add:hover { color: var(--accent); border-color: var(--accent); }
+.task-detail-delete:hover { color: var(--importance-high-text); border-color: var(--importance-high-border); }
+.task-detail-add:focus-visible,
+.task-detail-delete:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring); }
+
+.task-detail-footer {
+  margin-top: auto;
+  padding-top: 18px;
+}
+
+/* ─── Editing a name in place ───
+   No box and no swap: the name itself takes the caret. The only thing that
+   changes on focus is a quiet backing, so the text does not appear to move. */
+.task-label[contenteditable],
+.subtask-label[contenteditable] {
+  border-radius: 6px;
+  padding: 1px 3px;
+  margin-left: -3px;
+  cursor: text;
+  outline: none;
+}
+
+.task-label[contenteditable]:focus,
+.subtask-label[contenteditable]:focus {
+  background: var(--bg-input);
+  box-shadow: 0 0 0 2px var(--ring);
+  color: var(--text);
+}
+
+/* The name is a click target for editing, so hovering the row must not make
+   it look like a link to somewhere else. */
+.task-label:hover { color: var(--text); }
 
 /* ─── SAT Helper ─── */
 .section-subtitle { font-size: 0.92rem; opacity: 0.8; }

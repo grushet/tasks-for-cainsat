@@ -123,6 +123,7 @@ document.addEventListener('DOMContentLoaded', () => {
         trash:    '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
         list:     '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
         note:     '<path d="M4 5h16"/><path d="M4 10h16"/><path d="M4 15h10"/>',
+        close:    '<path d="M18 6 6 18M6 6l12 12"/>',
         grip:     '<circle cx="9" cy="6" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="6" r="1.4" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="9" cy="18" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="18" r="1.4" fill="currentColor" stroke="none"/>',
     };
 
@@ -810,10 +811,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     const lbl = document.createElement('span');
                     lbl.className = 'task-label';
                     lbl.textContent = task.text;
-                    lbl.tabIndex = 0;
-                    lbl.addEventListener('click', () => startEditingTaskName(task, li));
-                    lbl.addEventListener('keydown', e => {
-                        if (e.key === 'Enter') { e.preventDefault(); startEditingTaskName(task, li); }
+                    makeLabelEditable(lbl, () => task.text, (next) => {
+                        task.text = next;
+                        saveTasks();
+                        renderTasks();
+                        renderDayTasks();
                     });
                     li.appendChild(cb);
                     li.appendChild(lbl);
@@ -848,10 +850,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     const lbl = document.createElement('span');
                     lbl.className = 'task-label';
                     lbl.textContent = subtask.text;
-                    lbl.tabIndex = 0;
-                    lbl.addEventListener('click', () => startEditingSubtaskName(item.task.id, subtask, li));
-                    lbl.addEventListener('keydown', e => {
-                        if (e.key === 'Enter') { e.preventDefault(); startEditingSubtaskName(item.task.id, subtask, li); }
+                    makeLabelEditable(lbl, () => subtask.text, (next) => {
+                        subtask.text = next;
+                        saveTasks();
+                        renderTasks();
+                        renderDayTasks();
                     });
                     li.appendChild(cb);
                     li.appendChild(typeBadge);
@@ -1018,11 +1021,120 @@ document.addEventListener('DOMContentLoaded', () => {
         renderTasks();
     }
 
+    /**
+     * Moves one subtask beside another inside its parent.
+     *
+     * No pin is needed here, unlike a task: nothing ever re-sorts a subtask
+     * list, so the order it is stored in is the order it is shown in, and the
+     * server already keeps that.
+     */
+    function moveSubtask(parentTaskId, dragId, targetId, place) {
+        const parent = tasks.find(t => String(t.id) === String(parentTaskId));
+        if (!parent || !parent.subtasks || String(dragId) === String(targetId)) return;
+        const from = parent.subtasks.findIndex(st => String(st.id) === String(dragId));
+        if (from === -1) return;
+        const [moved] = parent.subtasks.splice(from, 1);
+        let to = parent.subtasks.findIndex(st => String(st.id) === String(targetId));
+        if (to === -1) { parent.subtasks.splice(from, 0, moved); return; }
+        if (place === 'after') to += 1;
+        parent.subtasks.splice(to, 0, moved);
+        saveTasks();
+        renderTasks();
+        renderCalendar();
+        renderDayTasks();
+    }
+
+    function nudgeSubtask(parentTaskId, subtaskId, dir) {
+        const parent = tasks.find(t => String(t.id) === String(parentTaskId));
+        if (!parent || !parent.subtasks) return;
+        const at = parent.subtasks.findIndex(st => String(st.id) === String(subtaskId));
+        const to = at + dir;
+        if (at === -1 || to < 0 || to >= parent.subtasks.length) return;
+        [parent.subtasks[at], parent.subtasks[to]] = [parent.subtasks[to], parent.subtasks[at]];
+        saveTasks();
+        renderTasks();
+        renderCalendar();
+        renderDayTasks();
+    }
+
     let draggingTaskId = null;
+    let draggingSubtask = null;
+
+    /** Drag and drop for a subtask row, scoped to its own parent. */
+    function makeSubtaskDraggable(el, subtask, parentTaskId) {
+        el.addEventListener('dragstart', (e) => {
+            e.stopPropagation();
+            draggingSubtask = { id: String(subtask.id), parentTaskId: String(parentTaskId) };
+            el.classList.add('task-item--dragging');
+            e.dataTransfer.effectAllowed = 'move';
+            try { e.dataTransfer.setData('text/plain', String(subtask.id)); } catch { /* older browsers */ }
+        });
+
+        el.addEventListener('dragend', () => {
+            draggingSubtask = null;
+            el.classList.remove('task-item--dragging');
+            el.draggable = false;
+            clearDropMarkers();
+        });
+
+        el.addEventListener('dragover', (e) => {
+            if (!draggingSubtask) return;
+            if (draggingSubtask.parentTaskId !== String(parentTaskId)) return;
+            if (draggingSubtask.id === String(subtask.id)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            e.dataTransfer.dropEffect = 'move';
+            const r = el.getBoundingClientRect();
+            const after = e.clientY > r.top + r.height / 2;
+            el.classList.toggle('task-item--drop-after', after);
+            el.classList.toggle('task-item--drop-before', !after);
+        });
+
+        el.addEventListener('dragleave', () => {
+            el.classList.remove('task-item--drop-before', 'task-item--drop-after');
+        });
+
+        el.addEventListener('drop', (e) => {
+            if (!draggingSubtask) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const place = el.classList.contains('task-item--drop-after') ? 'after' : 'before';
+            const dragged = draggingSubtask;
+            draggingSubtask = null;
+            clearDropMarkers();
+            moveSubtask(dragged.parentTaskId, dragged.id, subtask.id, place);
+        });
+    }
+
+    /** The grip. Shared by tasks and subtasks; only the arrow keys differ. */
+    function makeDragHandle(title, onArrow) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'task-drag';
+        b.appendChild(icon('grip'));
+        b.title = title;
+        b.setAttribute('aria-label', 'Reorder');
+        // The handle, not the whole row, starts the drag, so a name stays
+        // clickable and a stray swipe does not move anything.
+        b.addEventListener('mousedown', (e) => {
+            e.stopPropagation();
+            if (!b.disabled) b.closest('.task-item, .subtask-item').draggable = true;
+        });
+        b.addEventListener('mouseup', () => {
+            const row = b.closest('.task-item, .subtask-item');
+            if (row) row.draggable = false;
+        });
+        b.addEventListener('click', (e) => e.stopPropagation());
+        b.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowUp') { e.preventDefault(); onArrow(-1); }
+            if (e.key === 'ArrowDown') { e.preventDefault(); onArrow(1); }
+        });
+        return b;
+    }
 
     function clearDropMarkers() {
         if (!taskListEl) return;
-        taskListEl.querySelectorAll('.task-item--drop-before, .task-item--drop-after')
+        document.querySelectorAll('.task-item--drop-before, .task-item--drop-after')
             .forEach(el => el.classList.remove('task-item--drop-before', 'task-item--drop-after'));
     }
 
@@ -1074,27 +1186,12 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    function dragHandle(task) {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'task-drag';
-        b.appendChild(icon('grip'));
-        if (task.completed) {
-            b.disabled = true;
-            b.title = 'Completed tasks keep their place';
-        } else {
-            b.title = 'Drag to reorder, or use the arrow keys';
-        }
-        b.setAttribute('aria-label', 'Reorder task');
-        // The handle, not the whole row, starts the drag, so a title stays
-        // selectable and a stray swipe does not move anything.
-        b.addEventListener('mousedown', () => { if (!b.disabled) b.closest('.task-item').draggable = true; });
-        b.addEventListener('mouseup', () => { const li = b.closest('.task-item'); if (li) li.draggable = false; });
-        b.addEventListener('keydown', (e) => {
-            const group = b.closest('.task-item')?.dataset.group;
-            if (e.key === 'ArrowUp') { e.preventDefault(); nudgeTask(task.id, group, -1); }
-            if (e.key === 'ArrowDown') { e.preventDefault(); nudgeTask(task.id, group, 1); }
-        });
+    function dragHandle(task, groupLabel) {
+        const b = makeDragHandle(
+            task.completed ? 'Completed tasks keep their place' : 'Drag to reorder, or use the arrow keys',
+            (dir) => nudgeTask(task.id, groupLabel, dir)
+        );
+        if (task.completed) b.disabled = true;
         return b;
     }
 
@@ -1319,19 +1416,59 @@ document.addEventListener('DOMContentLoaded', () => {
     const taskInput = document.getElementById('new-task-input');
     const taskListEl = document.getElementById('task-list');
 
-    /* ─── The new-task draft ─────────────────────────────────────────────
-       A priority and a due date can be chosen before the task exists, from
-       two buttons sitting inside the input box. They reuse the same popovers
-       a finished task uses, so there is one way to pick a priority and one
-       way to pick a date. A "!friday" typed into the text still wins over the
-       date button: a shortcut in the sentence is the later, more specific
-       instruction. */
-    const taskEntryPriorityBtn = document.getElementById('new-task-priority');
-    const taskEntryDateBtn = document.getElementById('new-task-date');
-    let draftImportance = null;
-    let draftDueDate = null;
-    let draftDateFromText = false;
+    /* ─── Editing a name in place ────────────────────────────────────────
+       Clicking a name used to swap it for an <input>, which drew a box over
+       the row and put the caret at the end however far down the line the
+       click landed. The name is simply editable instead: the caret goes
+       exactly where it was aimed, there is no box, and nothing moves. */
+    function selectAllText(el) {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+    }
 
+    /**
+     * Makes one label editable in place. `getText` is the stored name, so a
+     * blank edit or an Escape can put it back; `onCommit` is only called when
+     * the text really changed, because committing redraws the list and that
+     * would throw away the caret for nothing.
+     */
+    function makeLabelEditable(label, getText, onCommit) {
+        // Set as an attribute, not through the property: the attribute is what
+        // the row's own click handler tests to tell "the user aimed at the
+        // name" from "the user aimed at the row", and a property assignment
+        // that an engine quietly ignores would leave that test lying.
+        // plaintext-only keeps a pasted heading from arriving as markup; not
+        // every engine takes the value, so 'true' is the fallback.
+        label.setAttribute('contenteditable', 'plaintext-only');
+        if (label.contentEditable !== 'plaintext-only') label.setAttribute('contenteditable', 'true');
+        label.spellcheck = false;
+
+        const revert = () => { label.textContent = getText(); };
+
+        label.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); label.blur(); }
+            if (e.key === 'Escape') { e.preventDefault(); revert(); label.blur(); }
+            // A row is only draggable from its handle, but a drag started on
+            // the text would still fight the caret.
+            e.stopPropagation();
+        });
+
+        label.addEventListener('blur', () => {
+            const next = (label.textContent || '').replace(/\s+/g, ' ').trim();
+            if (!next || next === getText()) { revert(); return; }
+            onCommit(next);
+        });
+
+        return () => { label.focus(); selectAllText(label); };
+    }
+
+    /* ─── The draft on an entry box ──────────────────────────────────────
+       A priority and a due date can be chosen before the thing exists, from
+       two buttons sitting inside the input. The same wiring serves the
+       new-task box and the new-subtask box, so both behave identically. */
     function paintEntryBtn(btn, iconName, text, cls, title) {
         if (!btn) return;
         btn.className = 'task-entry-btn' + (cls ? ' ' + cls : '');
@@ -1344,70 +1481,111 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.title = title;
     }
 
-    function renderTaskEntryDraft() {
-        paintEntryBtn(
-            taskEntryPriorityBtn, 'flag',
-            draftImportance ? PRIORITY_LABEL[draftImportance] : '',
-            draftImportance ? `task-entry-btn--${draftImportance}` : '',
-            draftImportance ? `Priority: ${PRIORITY_LABEL[draftImportance]}` : 'Set a priority for the new task'
-        );
-        paintEntryBtn(
-            taskEntryDateBtn, 'calendar',
-            draftDueDate ? formatTaskDateDisplay(draftDueDate) : '',
-            draftDueDate ? 'task-entry-btn--set' : '',
-            draftDueDate ? `Due ${formatTaskDateDisplay(draftDueDate)}` : 'Set a due date for the new task'
-        );
-    }
-
-    // Cleared after every add, so the next task starts from nothing rather
-    // than quietly inheriting the last one's priority.
-    function clearTaskEntryDraft() {
-        draftImportance = null;
-        draftDueDate = null;
-        draftDateFromText = false;
-        renderTaskEntryDraft();
-    }
-
-    if (taskEntryPriorityBtn) {
-        taskEntryPriorityBtn.addEventListener('click', () => {
-            openPriorityPopover(taskEntryPriorityBtn, draftImportance, (v) => { draftImportance = v; renderTaskEntryDraft(); });
-        });
-    }
-    if (taskEntryDateBtn) {
-        taskEntryDateBtn.addEventListener('click', () => {
-            openDatePopover(taskEntryDateBtn, draftDueDate, (v) => {
-                draftDueDate = v;
-                draftDateFromText = false;
-                renderTaskEntryDraft();
-            });
-        });
-    }
-
     /**
-     * Keeps the date button and the typed shortcut saying the same thing.
+     * Wires an input and its two buttons into one draft.
      *
-     * Typing "!today" fills the button in as you go, and deleting a character
-     * out of it empties the button again. A date picked from the button is
-     * left alone unless a shortcut appears in the text, so the two can never
-     * be showing different answers at the moment Enter is pressed. That
-     * disagreement is what made the old silent override confusing: nothing on
-     * screen said which one was going to win.
+     * The buttons follow the text as it is typed: "!today" fills the date
+     * button in as you go, and deleting a character out of the shortcut
+     * empties it again. A date picked from the button survives unless a
+     * shortcut appears in the text. The two can therefore never be showing
+     * different answers at the moment Enter is pressed, which is what made
+     * the old silent override confusing.
      */
-    function syncDraftFromText() {
-        if (!taskInput) return;
-        const { dueDate } = parseTaskKeywords(taskInput.value || '');
-        if (dueDate) {
-            draftDueDate = dueDate;
-            draftDateFromText = true;
-        } else if (draftDateFromText) {
-            draftDueDate = null;
-            draftDateFromText = false;
+    function createEntryDraft(input, priorityBtn, dateBtn, what) {
+        const draft = { importance: null, dueDate: null, fromText: false };
+
+        function paint() {
+            paintEntryBtn(
+                priorityBtn, 'flag',
+                draft.importance ? PRIORITY_LABEL[draft.importance] : '',
+                draft.importance ? `task-entry-btn--${draft.importance}` : '',
+                draft.importance ? `Priority: ${PRIORITY_LABEL[draft.importance]}` : `Set a priority for the new ${what}`
+            );
+            paintEntryBtn(
+                dateBtn, 'calendar',
+                draft.dueDate ? formatTaskDateDisplay(draft.dueDate) : '',
+                draft.dueDate ? 'task-entry-btn--set' : '',
+                draft.dueDate ? `Due ${formatTaskDateDisplay(draft.dueDate)}` : `Set a due date for the new ${what}`
+            );
         }
-        renderTaskEntryDraft();
+
+        function syncFromText() {
+            const { dueDate } = parseTaskKeywords(input.value || '');
+            if (dueDate) {
+                draft.dueDate = dueDate;
+                draft.fromText = true;
+            } else if (draft.fromText) {
+                draft.dueDate = null;
+                draft.fromText = false;
+            }
+            paint();
+        }
+
+        // Cleared after every add, so the next one starts from nothing rather
+        // than quietly inheriting the last one's priority.
+        function reset() {
+            draft.importance = null;
+            draft.dueDate = null;
+            draft.fromText = false;
+            paint();
+        }
+
+        if (priorityBtn) {
+            priorityBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openPriorityPopover(priorityBtn, draft.importance, (v) => { draft.importance = v; paint(); });
+            });
+        }
+        if (dateBtn) {
+            dateBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openDatePopover(dateBtn, draft.dueDate, (v) => {
+                    draft.dueDate = v;
+                    draft.fromText = false;
+                    paint();
+                });
+            });
+        }
+        input.addEventListener('input', syncFromText);
+        paint();
+
+        return { draft, reset };
     }
 
-    if (taskInput) taskInput.addEventListener('input', syncDraftFromText);
-    renderTaskEntryDraft();
+    /** The markup an entry box needs: the input, and its two buttons. */
+    function buildEntryField(input) {
+        const field = document.createElement('div');
+        field.className = 'task-entry-field';
+
+        const actions = document.createElement('div');
+        actions.className = 'task-entry-actions';
+
+        const priorityBtn = document.createElement('button');
+        priorityBtn.type = 'button';
+        priorityBtn.className = 'task-entry-btn';
+
+        const dateBtn = document.createElement('button');
+        dateBtn.type = 'button';
+        dateBtn.className = 'task-entry-btn';
+
+        actions.append(priorityBtn, dateBtn);
+        field.append(input, actions);
+        return { field, priorityBtn, dateBtn };
+    }
+
+    /* ─── The new-task draft ─────────────────────────────────────────────
+       A priority and a due date can be chosen before the task exists, from
+       two buttons sitting inside the input box. They reuse the same popovers
+       a finished task uses, so there is one way to pick a priority and one
+       way to pick a date. A "!friday" typed into the text still wins over the
+       date button: a shortcut in the sentence is the later, more specific
+       instruction. */
+    const taskEntry = taskInput && createEntryDraft(
+        taskInput,
+        document.getElementById('new-task-priority'),
+        document.getElementById('new-task-date'),
+        'task'
+    );
 
     // Anything typed before the list arrives would be thrown away when the
     // server's copy replaces the in-memory array, so the box stays shut until
@@ -1613,6 +1791,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         renderHomeSummary();
+        if (openDetailId) renderTaskDetail();
     }
 
     /* ─── Subtask disclosure ─────────────────────────────────────────────
@@ -1624,14 +1803,6 @@ document.addEventListener('DOMContentLoaded', () => {
        Not persisted on purpose. It is view state, and storing it would put a
        field on every task record the API round-trips. */
     const collapsedSubtasks = new Set();
-    const openNotes = new Set();
-
-    function isNoteOpen(taskId) { return openNotes.has(String(taskId)); }
-    function setNoteOpen(taskId, open) {
-        const key = String(taskId);
-        if (open) openNotes.add(key);
-        else openNotes.delete(key);
-    }
 
     function isSubtaskPanelOpen(taskId) { return !collapsedSubtasks.has(String(taskId)); }
 
@@ -1730,6 +1901,172 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    /* ─── Task detail ────────────────────────────────────────────────────
+       One task, opened in a panel down the right-hand side: its name, its
+       notes, its properties and its subtasks.
+
+       This is where everything that would have cluttered the row goes. The
+       row stays a row -- one line you can scan past -- and clicking anywhere
+       on it that is not a control opens the task in full here. Notes in
+       particular are only ever read here: a paragraph of context on every
+       row would turn a list into a wall of text. */
+    let openDetailId = null;
+
+    const detailPanel = document.createElement('aside');
+    detailPanel.className = 'task-detail';
+    detailPanel.setAttribute('role', 'dialog');
+    detailPanel.setAttribute('aria-label', 'Task details');
+    detailPanel.hidden = true;
+
+    // Only ever covers the page on a narrow screen, where the panel takes the
+    // whole width. On a wide one the list stays usable behind it.
+    const detailScrim = document.createElement('div');
+    detailScrim.className = 'task-detail-scrim';
+    detailScrim.hidden = true;
+    detailScrim.addEventListener('click', () => closeTaskDetail());
+
+    document.body.append(detailScrim, detailPanel);
+
+    function openTaskDetail(taskId) {
+        openDetailId = String(taskId);
+        renderTaskDetail();
+    }
+
+    function closeTaskDetail() {
+        openDetailId = null;
+        detailPanel.hidden = true;
+        detailScrim.hidden = true;
+        detailPanel.replaceChildren();
+    }
+
+    document.addEventListener('keydown', (e) => {
+        // A popover inside the panel gets the Escape first; closing both at
+        // once would lose the task as well as the menu.
+        if (e.key === 'Escape' && openDetailId && !activePopover) closeTaskDetail();
+    });
+
+    function detailSection(labelText) {
+        const wrap = document.createElement('div');
+        wrap.className = 'task-detail-section';
+        const h = document.createElement('div');
+        h.className = 'task-detail-label';
+        h.textContent = labelText;
+        wrap.appendChild(h);
+        return wrap;
+    }
+
+    function renderTaskDetail() {
+        if (!openDetailId) return;
+        const task = tasks.find(t => String(t.id) === openDetailId);
+        // The task was deleted, or completed out from under the panel.
+        if (!task) { closeTaskDetail(); return; }
+
+        const update = (patch) => {
+            Object.assign(task, patch);
+            saveTasks();
+            renderTasks();
+            renderCalendar();
+            renderDayTasks();
+        };
+
+        detailPanel.replaceChildren();
+        detailPanel.hidden = false;
+        detailScrim.hidden = false;
+
+        // ── header
+        const header = document.createElement('div');
+        header.className = 'task-detail-header';
+
+        const done = document.createElement('input');
+        done.type = 'checkbox';
+        done.className = 'task-checkbox';
+        done.checked = !!task.completed;
+        done.setAttribute('aria-label', 'Mark done');
+        done.addEventListener('change', () => toggleTask(task.id, done.checked));
+
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'task-detail-close';
+        closeBtn.title = 'Close';
+        closeBtn.setAttribute('aria-label', 'Close task details');
+        closeBtn.appendChild(icon('close'));
+        closeBtn.addEventListener('click', () => closeTaskDetail());
+
+        header.append(done, closeBtn);
+        detailPanel.appendChild(header);
+
+        // ── name
+        const title = document.createElement('h3');
+        title.className = 'task-detail-title';
+        title.textContent = task.text;
+        makeLabelEditable(title, () => task.text, (next) => update({ text: next }));
+        detailPanel.appendChild(title);
+
+        // ── properties
+        const props = detailSection('Details');
+        const propRow = document.createElement('div');
+        propRow.className = 'task-detail-props';
+        propRow.appendChild(dueDateField(task.dueDate, isTaskOverdue(task), (v) => update({ dueDate: v })));
+        propRow.appendChild(priorityChip(task.importance, (v) => update({ importance: v })));
+        propRow.appendChild(repeatChip(task.repeat, (v) => update({ repeat: v })));
+        propRow.appendChild(reminderChip(task.reminder, task.dueDate, (v) => update({ reminder: v, reminderFired: false })));
+        props.appendChild(propRow);
+        detailPanel.appendChild(props);
+
+        // ── notes
+        const notes = detailSection('Notes');
+        const noteBox = document.createElement('textarea');
+        noteBox.className = 'task-note-box';
+        noteBox.rows = 6;
+        noteBox.placeholder = 'Anything worth remembering about this task...';
+        noteBox.value = task.description || '';
+        // Saved on the way out rather than on every keystroke, so a long note
+        // is one write and not two hundred.
+        noteBox.addEventListener('blur', () => {
+            const next = noteBox.value.trim() || null;
+            if (next !== (task.description || null)) update({ description: next });
+        });
+        notes.appendChild(noteBox);
+        detailPanel.appendChild(notes);
+
+        // ── subtasks, drawn with the same row builder the list uses
+        const subs = detailSection(task.subtasks.length ? `Subtasks (${task.subtasks.filter(s => s.completed).length}/${task.subtasks.length})` : 'Subtasks');
+        const subList = document.createElement('div');
+        subList.className = 'subtasks subtasks--detail';
+        task.subtasks.forEach(subtask => subList.appendChild(renderSubtask(subtask, task.id)));
+        subs.appendChild(subList);
+
+        const addSub = document.createElement('button');
+        addSub.type = 'button';
+        addSub.className = 'task-detail-add';
+        addSub.appendChild(icon('plus'));
+        const addSubText = document.createElement('span');
+        addSubText.textContent = 'Add subtask';
+        addSub.appendChild(addSubText);
+        addSub.addEventListener('click', () => startAddingSubtask(task.id, subList));
+        subs.appendChild(addSub);
+        detailPanel.appendChild(subs);
+
+        // ── delete
+        const footer = document.createElement('div');
+        footer.className = 'task-detail-footer';
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'task-detail-delete';
+        del.appendChild(icon('trash'));
+        const delText = document.createElement('span');
+        delText.textContent = 'Delete task';
+        del.appendChild(delText);
+        del.addEventListener('click', () => {
+            confirmDelete('Delete task?', `"${task.text}" and its subtasks will be removed. This cannot be undone.`, () => {
+                closeTaskDetail();
+                deleteTask(task.id);
+            });
+        });
+        footer.appendChild(del);
+        detailPanel.appendChild(footer);
+    }
+
     /* ─── A task row ─────────────────────────────────────────────────────
        Five grid columns: drag handle, checkbox, body, due date, "⋯", with
        the note and the subtasks on rows of their own beneath. Because they are
@@ -1756,7 +2093,7 @@ document.addEventListener('DOMContentLoaded', () => {
             renderDayTasks();
         };
 
-        li.appendChild(dragHandle(task));
+        li.appendChild(dragHandle(task, groupLabel));
         makeRowDraggable(li, task, groupLabel);
 
         // ── checkbox
@@ -1776,42 +2113,17 @@ document.addEventListener('DOMContentLoaded', () => {
         const label = document.createElement('span');
         label.className = 'task-label';
         label.textContent = task.text;
-        label.tabIndex = 0;
-        label.title = 'Click for notes, Enter to rename';
+        label.title = 'Click to edit the name';
+        const focusLabel = makeLabelEditable(label, () => task.text, (next) => update({ text: next }));
         body.appendChild(label);
 
-        // ── the note. Kept out of the row on purpose: a paragraph of context
-        // on every task turns a list you scan into a wall you read.
-        const notePanel = document.createElement('div');
-        notePanel.className = 'task-note';
-        notePanel.hidden = !isNoteOpen(task.id);
-
-        const noteBox = document.createElement('textarea');
-        noteBox.className = 'task-note-box';
-        noteBox.rows = 3;
-        noteBox.placeholder = 'Notes for this task...';
-        noteBox.value = task.description || '';
-        // Saved on the way out rather than on every keystroke, so a long note
-        // is one write and not two hundred.
-        noteBox.addEventListener('blur', () => {
-            const next = noteBox.value.trim() || null;
-            if (next !== (task.description || null)) update({ description: next });
-        });
-        noteBox.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') { e.preventDefault(); noteBox.blur(); }
-        });
-        notePanel.appendChild(noteBox);
-
-        const toggleNote = () => {
-            const open = !isNoteOpen(task.id);
-            setNoteOpen(task.id, open);
-            notePanel.hidden = !open;
-            if (open) noteBox.focus();
-        };
-        label.addEventListener('click', toggleNote);
-        label.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') { e.preventDefault(); startEditingTaskName(task, li); }
-            if (e.key === ' ') { e.preventDefault(); toggleNote(); }
+        // Anywhere on the row that is not a control opens the task in full.
+        li.addEventListener('click', (e) => {
+            // The names are listed by class as well as by attribute: they are
+            // the one place a click means "put the caret here", and that must
+            // not depend on contenteditable having been accepted.
+            if (e.target.closest('button, input, textarea, select, a, [contenteditable], .task-label, .subtask-label, .subtasks')) return;
+            openTaskDetail(task.id);
         });
 
         // ── chips
@@ -1820,14 +2132,15 @@ document.addEventListener('DOMContentLoaded', () => {
         chips.appendChild(priorityChip(task.importance, (v) => update({ importance: v })));
         chips.appendChild(repeatChip(task.repeat, (v) => update({ repeat: v })));
         chips.appendChild(reminderChip(task.reminder, task.dueDate, (v) => update({ reminder: v, reminderFired: false })));
-        // A note that is never shown needs one mark saying it is there.
+        // A note is only ever read in the panel, so the row carries one mark
+        // saying there is something to open.
         if (task.description) {
             chips.appendChild(buildChip({
                 iconName: 'note',
                 text: '',
                 classes: ['chip--set', 'chip--icon'],
-                title: 'Has notes. Click the title to read them.',
-                onClick: toggleNote,
+                title: 'Has notes',
+                onClick: () => openTaskDetail(task.id),
             }));
         }
 
@@ -1859,13 +2172,15 @@ document.addEventListener('DOMContentLoaded', () => {
         body.appendChild(chips);
         li.appendChild(body);
         li.appendChild(dueDateField(task.dueDate, isTaskOverdue(task), (v) => update({ dueDate: v })));
-        li.appendChild(notePanel);
 
         // ── "⋯". Every property is reachable from here as well as from its
         // chip, so nothing depends on hover being available.
         const menuBtn = moreButton('Task actions');
         menuBtn.addEventListener('click', () => {
             openPopover(menuBtn, (el, close) => {
+                el.appendChild(popItem('note', 'Open details', () => { close(); openTaskDetail(task.id); }));
+                el.appendChild(popSeparator());
+
                 el.appendChild(popItem('calendar', 'Due date', () => {
                     close();
                     openDatePopover(menuBtn, task.dueDate, (v) => update({ dueDate: v }));
@@ -1892,12 +2207,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     close();
                     setSubtaskPanelOpen(task.id, true);
                     subtaskPanel.hidden = false;
-                    startAddingSubtask(task.id, li);
+                    startAddingSubtask(task.id, subtaskPanel);
                 }));
 
                 el.appendChild(popItem('pencil', 'Rename', () => {
                     close();
-                    startEditingTaskName(task, li);
+                    focusLabel();
                 }));
 
                 if (!task.completed) {
@@ -1928,45 +2243,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
 
-    function startEditingTaskName(task, liElement) {
-        const label = liElement.querySelector('.task-label');
-        if (!label) return;
-        
-        const input = document.createElement('input');
-        input.type = 'text';
-        input.className = 'task-name-editor';
-        input.value = task.text;
-        
-        label.replaceWith(input);
-        input.focus();
-        input.select();
-        
-        let settled = false;
-
-        function commit() {
-            if (settled) return;
-            settled = true;
-            const newText = (input.value || '').trim();
-            if (newText && newText !== task.text) {
-                task.text = newText;
-                saveTasks();
-            }
-            renderTasks();
-        }
-
-        function cancel() {
-            if (settled) return;
-            settled = true;
-            renderTasks();
-        }
-        
-        input.addEventListener('blur', commit);
-        input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') { e.preventDefault(); commit(); }
-            if (e.key === 'Escape') { e.preventDefault(); cancel(); }
-        });
-    }
-
     /**
      * Pulls date shortcuts like "!today" or "!friday" out of a task name.
      *
@@ -1988,14 +2264,14 @@ document.addEventListener('DOMContentLoaded', () => {
             id: newId(),
             text: cleanText,
             completed: false,
-            dueDate: dueDate || draftDueDate || null,
-            importance: draftImportance || null,
+            dueDate: dueDate || taskEntry?.draft.dueDate || null,
+            importance: taskEntry?.draft.importance || null,
             repeat: null, reminder: null, reminderFired: false, subtasks: [],
             description: null, pinIndex: null,
         };
         tasks.unshift(task);
         saveTasks();
-        clearTaskEntryDraft();
+        taskEntry?.reset();
         taskHighlightId = task.id;
         renderTasks();
         renderCalendar();
@@ -2074,6 +2350,12 @@ document.addEventListener('DOMContentLoaded', () => {
             renderDayTasks();
         };
 
+        el.appendChild(makeDragHandle(
+            'Drag to reorder, or use the arrow keys',
+            (dir) => nudgeSubtask(parentTaskId, subtask.id, dir)
+        ));
+        makeSubtaskDraggable(el, subtask, parentTaskId);
+
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
         checkbox.className = 'subtask-checkbox';
@@ -2090,12 +2372,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const label = document.createElement('span');
         label.className = 'subtask-label';
         label.textContent = subtask.text;
-        label.tabIndex = 0;
-        label.title = 'Click to rename';
-        label.addEventListener('click', () => startEditingSubtaskName(parentTaskId, subtask, el));
-        label.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') { e.preventDefault(); startEditingSubtaskName(parentTaskId, subtask, el); }
-        });
+        label.title = 'Click to edit the name';
+        const focusLabel = makeLabelEditable(label, () => subtask.text, (next) => update({ text: next }));
         body.appendChild(label);
 
         // A subtask carries a due date and a priority, and nothing else. No
@@ -2126,8 +2404,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 pop.appendChild(popItem('pencil', 'Rename', () => {
                     close();
-                    startEditingSubtaskName(parentTaskId, subtask, el);
+                    focusLabel();
                 }));
+
+                pop.appendChild(popSeparator());
+                pop.appendChild(popItem('grip', 'Move up', () => { close(); nudgeSubtask(parentTaskId, subtask.id, -1); }));
+                pop.appendChild(popItem('grip', 'Move down', () => { close(); nudgeSubtask(parentTaskId, subtask.id, 1); }));
 
                 pop.appendChild(popItem('trash', 'Delete subtask', () => {
                     close();
@@ -2140,21 +2422,29 @@ document.addEventListener('DOMContentLoaded', () => {
         return el;
     }
 
-    function startAddingSubtask(parentTaskId, taskItemEl) {
-        const subtasksContainer = taskItemEl.querySelector('.subtasks');
-        if (!subtasksContainer) return;
+    /**
+     * The new-subtask box, which is the new-task box in miniature: an input,
+     * a priority button and a date button, and the same live "!" shortcuts.
+     */
+    function startAddingSubtask(parentTaskId, container) {
+        if (!container) return;
         // A task with no subtasks yet has its panel hidden, so the input would
         // otherwise be typed into blind.
         setSubtaskPanelOpen(parentTaskId, true);
-        subtasksContainer.hidden = false;
+        container.hidden = false;
+
         const input = document.createElement('input');
         input.type = 'text';
         input.placeholder = 'New subtask...';
         input.className = 'subtask-input';
-        
-        subtasksContainer.insertBefore(input, subtasksContainer.firstChild);
+
+        const { field, priorityBtn, dateBtn } = buildEntryField(input);
+        field.classList.add('task-entry-field--sub');
+        const entry = createEntryDraft(input, priorityBtn, dateBtn, 'subtask');
+
+        container.insertBefore(field, container.firstChild);
         input.focus();
-        
+
         // Settled by whichever of commit or cancel happens first, so an Escape
         // is not undone by the blur that follows removing the input.
         let settled = false;
@@ -2162,31 +2452,35 @@ document.addEventListener('DOMContentLoaded', () => {
         function commit() {
             if (settled) return;
             settled = true;
-
             const text = (input.value || '').trim();
             if (text) {
-                addSubtask(parentTaskId, text);
-            } else if (subtasksContainer.contains(input)) {
-                subtasksContainer.removeChild(input);
+                addSubtask(parentTaskId, text, entry.draft);
+            } else if (field.isConnected) {
+                field.remove();
             }
         }
 
         function cancel() {
             if (settled) return;
             settled = true;
-            if (subtasksContainer.contains(input)) {
-                subtasksContainer.removeChild(input);
-            }
+            if (field.isConnected) field.remove();
         }
-        
+
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') { e.preventDefault(); commit(); }
             if (e.key === 'Escape') { e.preventDefault(); cancel(); }
         });
-        input.addEventListener('blur', () => { setTimeout(commit, 50); });
+        // Deferred, because clicking one of the two buttons blurs the input and
+        // committing there would close the box before the popover could open.
+        input.addEventListener('blur', () => {
+            setTimeout(() => {
+                if (field.contains(document.activeElement) || activePopover) return;
+                commit();
+            }, 120);
+        });
     }
 
-    function addSubtask(parentTaskId, text) {
+    function addSubtask(parentTaskId, text, draft = {}) {
         const parentTask = tasks.find(t => String(t.id) === String(parentTaskId));
         if (!parentTask) return;
         if (!parentTask.subtasks) parentTask.subtasks = [];
@@ -2196,7 +2490,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const { cleanText, dueDate } = parseTaskKeywords(String(text || '').trim());
         if (!cleanText) return;
 
-        const subtask = { id: newId(), text: cleanText, completed: false, importance: null, dueDate: dueDate || null };
+        const subtask = {
+            id: newId(),
+            text: cleanText,
+            completed: false,
+            importance: draft.importance || null,
+            dueDate: dueDate || draft.dueDate || null,
+        };
         parentTask.subtasks.push(subtask);
         saveTasks();
         renderTasks();
@@ -2240,47 +2540,6 @@ document.addEventListener('DOMContentLoaded', () => {
         saveTasks();
         renderTasks();
     }
-
-    function startEditingSubtaskName(parentTaskId, subtask, subtaskEl) {
-        const label = subtaskEl.querySelector('.subtask-label');
-        if (!label) return;
-        
-        const input = document.createElement('input');
-        input.type = 'text';
-        input.className = 'subtask-name-editor';
-        input.value = subtask.text;
-        
-        label.replaceWith(input);
-        input.focus();
-        input.select();
-        
-        let settled = false;
-
-        function commit() {
-            if (settled) return;
-            settled = true;
-            const newText = (input.value || '').trim();
-            if (newText && newText !== subtask.text) {
-                subtask.text = newText;
-                saveTasks();
-            }
-            renderTasks();
-        }
-
-        function cancel() {
-            if (settled) return;
-            settled = true;
-            renderTasks();
-        }
-        
-        input.addEventListener('blur', commit);
-        input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') { e.preventDefault(); commit(); }
-            if (e.key === 'Escape') { e.preventDefault(); cancel(); }
-        });
-    }
-
-
 
     /** Tooltip text for the bell. Falls back rather than throwing on a bad value. */
     function reminderLabel(reminder) {
