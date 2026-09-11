@@ -43,15 +43,12 @@
   /* Checkbox tick. Drawn in --accent-text, which is white in both themes. */
   --check-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23ffffff' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 8.4l3.4 3.4L13 5.2'/%3E%3C/svg%3E");
 
-  /* Group-header glow highlight */
-  --glow-highlight: rgba(253, 197, 0, 0.28);
   /* The glow on a row jumped to from Home. Priority's colour where there is
      one, so the highlight says something as well as pointing. */
   --flash-none: rgba(37, 99, 235, 0.55);
   --flash-high: rgba(239, 68, 68, 0.6);
   --flash-med: rgba(234, 179, 8, 0.65);
   --flash-low: rgba(37, 99, 235, 0.55);
-  --glow-text: #92720a;
 }
 
 html.dark {
@@ -86,12 +83,10 @@ html.dark {
 
   --caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'%3E%3Cpath fill='%238ba5c5' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
 
-  --glow-highlight: rgba(37, 99, 235, 0.18);
   --flash-none: rgba(96, 165, 250, 0.6);
   --flash-high: rgba(248, 113, 113, 0.6);
   --flash-med: rgba(250, 204, 21, 0.6);
   --flash-low: rgba(96, 165, 250, 0.6);
-  --glow-text: #93c5fd;
 }
 
 /* ─── Reset ─── */
@@ -928,26 +923,25 @@ html.dark .calendar-day.tasks-completed {
 
 .task-group-header:not(:first-child) { margin-top: 18px; }
 
-.task-group-header--completed { opacity: 0.55; }
-
-@keyframes group-header-glow {
-  0%, 20% {
-    background: var(--glow-highlight);
-    color: var(--glow-text);
-    border-bottom-color: transparent;
-  }
-  100% {
-    background: transparent;
-    color: var(--text-muted);
-    border-bottom-color: var(--border);
-  }
+.task-group-header {
+  transition: background-color 0.32s ease, color 0.32s ease, box-shadow 0.32s ease, border-color 0.32s ease;
 }
 
+.task-group-header--completed { opacity: 0.55; }
+
+/* The same soft glow a row gets, on the header that names the group. It used
+   to be an animation, and the reduced-motion rules cut every animation on this
+   page to 0.01ms -- so it lit yellow for one frame and was gone, which is
+   worse than no highlight at all. A class the script adds and removes fades
+   properly and cannot be switched off underneath it. */
 .task-group-header--glow {
-  animation: group-header-glow 1.5s ease-out forwards;
-  border-radius: 4px;
-  padding-left: 6px;
-  padding-right: 6px;
+  background: var(--bg-surface);
+  color: var(--text);
+  border-bottom-color: transparent;
+  border-radius: 7px;
+  padding-left: 8px;
+  padding-right: 8px;
+  box-shadow: 0 0 18px 4px var(--flash-none);
 }
 
 /* One short glow when a row is jumped to from Home, and nothing more.
@@ -1633,11 +1627,14 @@ select.pop-input {
   .task-checkbox, .subtask-checkbox,
   .task-label::after, .subtask-label::after,
   .chip--count svg { transition: none; }
-  .task-group-header--glow { animation-duration: 0.01ms; }
-  /* Deliberately left on. A glow that fades up and down is a colour change,
-     not motion, and without the fade the highlight snaps on and off -- which
-     is what made it read as a border appearing rather than a flash. */
+  /* Deliberately left on. A colour fading up and down is a colour change,
+     not motion, and without the fade a highlight snaps on and off -- which is
+     what made the row read as a border appearing and the group header flash
+     for a single frame and vanish. */
   .task-item { transition: box-shadow 0.32s ease; }
+  .task-group-header {
+    transition: background-color 0.32s ease, color 0.32s ease, box-shadow 0.32s ease, border-color 0.32s ease;
+  }
 }
 
 /* ─── Task detail ───

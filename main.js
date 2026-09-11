@@ -1327,6 +1327,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         const tasksLink = document.querySelector('.nav-link[data-target="page-tasks"]');
                         if (tasksLink) tasksLink.click();
                         taskHighlightId = item.id;
+                        taskHighlightScroll = true;
                         renderTasks();
                     });
 
@@ -1409,6 +1410,11 @@ document.addEventListener('DOMContentLoaded', () => {
     let taskSortBy = '';
     let taskHighlightGroup = null;
     let taskHighlightId = null;
+    // Whether the highlight should also bring the row into view. A jump from
+    // Home has to travel to find the task; adding a task must not, because
+    // under Sort by date a task due next week lands far below the input and
+    // dragging the page down there costs you the next thing you were typing.
+    let taskHighlightScroll = false;
     const recentlyCompleted = new Set();
     /** Set once the server's list has arrived, so an early save cannot wipe it. */
     let plannerLoaded = false;
@@ -1754,7 +1760,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const pendingGlow = taskHighlightGroup;
         taskHighlightGroup = null;
         const pendingNewId = taskHighlightId;
+        const pendingScroll = taskHighlightScroll;
         taskHighlightId = null;
+        taskHighlightScroll = false;
         groups.forEach(group => {
             if (group.label) {
                 const header = document.createElement('li');
@@ -1765,6 +1773,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     requestAnimationFrame(() => {
                         header.scrollIntoView({ behavior: 'smooth', block: 'center' });
                         header.classList.add('task-group-header--glow');
+                        // A shade longer than a single row: a group is a
+                        // bigger thing to have arrived at.
+                        setTimeout(() => header.classList.remove('task-group-header--glow'), 900);
                     });
                 }
             }
@@ -1774,7 +1785,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const newEl = taskListEl.querySelector(`.task-item[data-id="${CSS.escape(String(pendingNewId))}"]`);
             if (newEl) {
                 requestAnimationFrame(() => {
-                    newEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    if (pendingScroll) newEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
                     newEl.classList.add('task-item--flash');
                     setTimeout(() => newEl.classList.remove('task-item--flash'), 600);
                 });
