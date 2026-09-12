@@ -7,6 +7,7 @@
     <title>cain Tasks</title>
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#6366f1" />
+    <link rel="icon" href="/icon-192.png" type="image/png" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
     <!-- FOUC prevention: apply dark class before paint -->
     <script>try{if(localStorage.getItem('theme')==='dark')document.documentElement.classList.add('dark')}catch(e){}</script>
@@ -261,18 +262,6 @@
             <div id="sync-banner" class="sync-banner" hidden role="status" aria-live="polite">
                 <span id="sync-banner-text"></span>
                 <button type="button" id="sync-banner-retry" class="sync-banner-retry">Retry</button>
-            </div>
-
-            <!-- Delete Confirmation Modal -->
-            <div id="delete-confirm-modal" class="delete-confirm-modal hidden">
-                <div class="delete-confirm-content">
-                    <h3>Delete Task?</h3>
-                    <p>Are you sure you want to delete this task?</p>
-                    <div class="delete-confirm-buttons">
-                        <button id="delete-confirm-cancel" class="delete-confirm-btn cancel-btn">Cancel</button>
-                        <button id="delete-confirm-yes" class="delete-confirm-btn delete-btn">Delete</button>
-                    </div>
-                </div>
             </div>
 
             <section id="page-home" class="page active">

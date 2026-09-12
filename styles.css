@@ -929,6 +929,30 @@ html.dark .calendar-day.tasks-completed {
 
 .task-group-header--completed { opacity: 0.55; }
 
+.task-group-header--with-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.task-group-header-action {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: normal;
+  cursor: pointer;
+}
+
+.task-group-header-action:hover { background: var(--bg-surface); color: var(--text); }
+
 /* The same soft glow a row gets, on the header that names the group. It used
    to be an animation, and the reduced-motion rules cut every animation on this
    page to 0.01ms -- so it lit yellow for one frame and was gone, which is
@@ -1840,61 +1864,6 @@ html.dark .task-detail { box-shadow: -8px 0 28px rgba(0, 0, 0, 0.45); }
   transform: translateY(2px);
   box-shadow: 0 2px 0 0 var(--accent-shadow);
 }
-
-/* ─── Delete Modal ─── */
-.delete-confirm-modal {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.45);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  backdrop-filter: blur(4px);
-}
-.delete-confirm-modal.hidden { display: none; }
-
-.delete-confirm-content {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 32px;
-  max-width: 400px;
-  width: 90%;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.15);
-  animation: slideIn 0.22s ease;
-}
-html.dark .delete-confirm-content { box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
-
-@keyframes slideIn {
-  from { transform: translateY(-12px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
-}
-
-.delete-confirm-content h3 { margin: 0 0 10px 0; font-size: 1.15rem; color: var(--text); }
-.delete-confirm-content p { margin: 0 0 24px 0; font-size: 0.9rem; color: var(--text-muted); line-height: 1.5; }
-
-.delete-confirm-buttons { display: flex; gap: 10px; justify-content: flex-end; }
-
-.delete-confirm-btn {
-  padding: 10px 18px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.12s ease;
-  font-size: 0.9rem;
-  font-family: inherit;
-}
-.delete-confirm-btn.cancel-btn { background: var(--bg-surface); color: var(--text); }
-.delete-confirm-btn.cancel-btn:hover { background: var(--bg-input); }
-.delete-confirm-btn.delete-btn {
-  background: rgba(239,68,68,0.1);
-  color: #ef4444;
-  border-color: rgba(239,68,68,0.3);
-}
-.delete-confirm-btn.delete-btn:hover { background: rgba(239,68,68,0.18); border-color: rgba(239,68,68,0.5); }
-.delete-confirm-btn:active { transform: scale(0.96); }
 
 /* ─── Responsive ─── */
 @media (max-width: 768px) {

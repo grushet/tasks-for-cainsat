@@ -55,57 +55,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     refreshTodayDisplay();
 
-    /* ─── Delete confirmation ────────────────────────────────────────────
-       The modal already existed but nothing reached it: the old row menu
-       called deleteTask straight from its Delete item, so a task went for
-       good on one click. It now holds a callback rather than a task id, so a
-       subtask can be confirmed the same way. */
-    const deleteConfirmModal = document.getElementById('delete-confirm-modal');
-    const deleteConfirmCancel = document.getElementById('delete-confirm-cancel');
-    const deleteConfirmYes = document.getElementById('delete-confirm-yes');
-    const deleteConfirmHeading = deleteConfirmModal
-        ? deleteConfirmModal.querySelector('.delete-confirm-content h3')
-        : null;
-    const deleteConfirmText = deleteConfirmModal
-        ? deleteConfirmModal.querySelector('.delete-confirm-content p')
-        : null;
-    let pendingDelete = null;
-
-    function confirmDelete(heading, message, run) {
-        if (!deleteConfirmModal) { run(); return; }
-        pendingDelete = run;
-        if (deleteConfirmHeading) deleteConfirmHeading.textContent = heading;
-        if (deleteConfirmText) deleteConfirmText.textContent = message;
-        deleteConfirmModal.classList.remove('hidden');
-        if (deleteConfirmCancel) deleteConfirmCancel.focus();
-    }
-
-    function hideDeleteConfirm() {
-        if (deleteConfirmModal) deleteConfirmModal.classList.add('hidden');
-        pendingDelete = null;
-    }
-
-    if (deleteConfirmCancel) deleteConfirmCancel.addEventListener('click', hideDeleteConfirm);
-    if (deleteConfirmYes) {
-        deleteConfirmYes.addEventListener('click', () => {
-            const run = pendingDelete;
-            hideDeleteConfirm();
-            if (run) run();
-        });
-    }
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && deleteConfirmModal && !deleteConfirmModal.classList.contains('hidden')) {
-            hideDeleteConfirm();
-        }
-    });
-
-    // Close modal on background click
-    deleteConfirmModal.addEventListener('click', (e) => {
-        if (e.target === deleteConfirmModal) {
-            hideDeleteConfirm();
-        }
-    });
-
     /* ─── Icons ──────────────────────────────────────────────────────────
        Inline SVG, not emoji. The row used to draw 🔔 and ↻ as text, which most
        platforms render as a full-colour emoji: it ignores `color`, so those
@@ -1011,16 +960,6 @@ document.addEventListener('DOMContentLoaded', () => {
         commitOrder(ids);
     }
 
-    /** Hands a group back to the sort. */
-    function clearManualOrder(groupLabel) {
-        renderedGroupIds(groupLabel).forEach(id => {
-            const t = tasks.find(x => String(x.id) === String(id));
-            if (t) t.pinIndex = null;
-        });
-        saveTasks();
-        renderTasks();
-    }
-
     /**
      * Moves one subtask beside another inside its parent.
      *
@@ -1767,7 +1706,18 @@ document.addEventListener('DOMContentLoaded', () => {
             if (group.label) {
                 const header = document.createElement('li');
                 header.className = 'task-group-header';
-                header.textContent = group.label;
+                if (group.label === 'Overdue') header.classList.add('task-group-header--with-action');
+                const labelEl = document.createElement('span');
+                labelEl.textContent = group.label;
+                header.appendChild(labelEl);
+                if (group.label === 'Overdue') {
+                    const postponeBtn = document.createElement('button');
+                    postponeBtn.type = 'button';
+                    postponeBtn.className = 'task-group-header-action';
+                    postponeBtn.textContent = 'Postpone all to today';
+                    postponeBtn.addEventListener('click', () => postponeOverdueTasks(group.items));
+                    header.appendChild(postponeBtn);
+                }
                 taskListEl.appendChild(header);
                 if (pendingGlow && group.label === pendingGlow) {
                     requestAnimationFrame(() => {
@@ -2069,10 +2019,8 @@ document.addEventListener('DOMContentLoaded', () => {
         delText.textContent = 'Delete task';
         del.appendChild(delText);
         del.addEventListener('click', () => {
-            confirmDelete('Delete task?', `"${task.text}" and its subtasks will be removed. This cannot be undone.`, () => {
-                closeTaskDetail();
-                deleteTask(task.id);
-            });
+            closeTaskDetail();
+            deleteTask(task.id);
         });
         footer.appendChild(del);
         detailPanel.appendChild(footer);
@@ -2230,16 +2178,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     el.appendChild(popSeparator());
                     el.appendChild(popItem('grip', 'Move up', () => { close(); nudgeTask(task.id, li.dataset.group, -1); }));
                     el.appendChild(popItem('grip', 'Move down', () => { close(); nudgeTask(task.id, li.dataset.group, 1); }));
-                    if (pinnedIndex(task) !== null) {
-                        el.appendChild(popItem('list', 'Clear manual order', () => { close(); clearManualOrder(li.dataset.group); }));
-                    }
                 }
 
                 el.appendChild(popSeparator());
 
                 el.appendChild(popItem('trash', 'Delete task', () => {
                     close();
-                    confirmDelete('Delete task?', `"${task.text}" and its subtasks will be removed. This cannot be undone.`, () => deleteTask(task.id));
+                    deleteTask(task.id);
                 }, { danger: true }));
             }, { align: 'end' });
         });
@@ -2336,6 +2281,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function postponeOverdueTasks(overdueTasks) {
+        if (!overdueTasks.length) return;
+        const today = todayYMD();
+        overdueTasks.forEach(t => { t.dueDate = today; });
+        saveTasks();
+        renderTasks();
+        renderCalendar();
+        renderDayTasks();
+    }
+
     function deleteTask(id) {
         const idx = tasks.findIndex(t => String(t.id) === String(id));
         if (idx === -1) return;
@@ -2424,7 +2379,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 pop.appendChild(popItem('trash', 'Delete subtask', () => {
                     close();
-                    confirmDelete('Delete subtask?', `"${subtask.text}" will be removed. This cannot be undone.`, () => deleteSubtask(parentTaskId, subtask.id));
+                    deleteSubtask(parentTaskId, subtask.id);
                 }, { danger: true }));
             }, { align: 'end' });
         });
