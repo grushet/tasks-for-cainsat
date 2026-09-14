@@ -104,6 +104,11 @@ export function deletePushSubscription(endpoint) {
   });
 }
 
+/** Permanently deletes the signed-in student's account and everything in it. */
+export function deleteAccount() {
+  return call("/api/me", { method: "DELETE" });
+}
+
 /**
  * Coalesces rapid changes into one request, and guarantees the last value wins.
  *

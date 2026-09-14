@@ -212,13 +212,6 @@ html.dark .nav-link.active {
   box-shadow: 0 1px 8px rgba(37,99,235,0.18);
 }
 
-/* Logout link */
-#logout-btn { margin-top: 12px; }
-#logout-btn:hover {
-  color: #ef4444 !important;
-  background: rgba(239,68,68,0.08) !important;
-}
-
 /* Sidebar bottom */
 .sidebar-bottom {
   padding: 10px;
@@ -261,6 +254,181 @@ html.dark .nav-link.active {
 html.dark .theme-toggle-btn .icon-sun { display: block; }
 html.dark .theme-toggle-btn .icon-moon { display: none; }
 
+/* Signed-in account row */
+.sidebar-user-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  margin-top: 2px;
+}
+
+.sidebar-user-avatar,
+.sidebar-user-avatar-fallback {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  object-fit: cover;
+}
+
+.sidebar-user-avatar-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.sidebar-user-avatar-fallback svg { width: 15px; height: 15px; }
+
+.sidebar-user-name {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Sign out / delete account */
+.sidebar-account-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: none;
+  background: none;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: left;
+}
+
+.sidebar-account-btn svg { width: 15px; height: 15px; flex-shrink: 0; }
+
+.sidebar-account-btn:hover {
+  color: var(--text);
+  background: rgba(0,0,0,0.05);
+}
+
+html.dark .sidebar-account-btn:hover {
+  background: rgba(255,255,255,0.05);
+}
+
+.sidebar-account-btn--danger:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+/* Delete-account confirmation panel */
+.sidebar-delete-confirm {
+  margin: 4px 4px 6px;
+  padding: 10px;
+  border-radius: 12px;
+  background: var(--danger-soft);
+}
+
+.sidebar-delete-confirm p {
+  margin: 0 0 8px;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--danger);
+}
+
+.sidebar-delete-confirm input {
+  width: 100%;
+  padding: 7px 10px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 0.82rem;
+}
+
+.sidebar-delete-actions { display: flex; gap: 8px; }
+
+.sidebar-delete-actions button {
+  flex: 1;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: none;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.74rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+#sidebar-delete-confirm-btn {
+  background: var(--danger);
+  color: #fff;
+}
+
+#sidebar-delete-confirm-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+#sidebar-delete-cancel-btn {
+  background: none;
+  color: var(--text-muted);
+}
+
+#sidebar-delete-cancel-btn:hover { color: var(--text); }
+
+/* Legal links */
+.sidebar-legal {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px 2px;
+  font-size: 0.68rem;
+}
+
+.sidebar-legal a {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.sidebar-legal a:hover { text-decoration: underline; }
+
+/* ─── Loading skeletons ─── */
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+.skeleton {
+  display: inline-block;
+  background: var(--border);
+  border-radius: 6px;
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+.skeleton-line { display: block; }
+
+.task-item-skeleton {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.skeleton-checkbox {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  flex-shrink: 0;
+}
+
 /* Sidebar section title (used by JS) */
 .sidebar-section-title {
   font-family: var(--font-display);
@@ -287,8 +455,7 @@ html.dark .theme-toggle-btn .icon-moon { display: none; }
 /* Page headings */
 #page-home h2,
 #page-tasks h2,
-#page-calendar h2,
-#page-sat h2 {
+#page-calendar h2 {
   font-size: 1.65rem;
   font-weight: 700;
   margin: 0 0 24px 0;
@@ -1841,29 +2008,6 @@ html.dark .task-detail { box-shadow: -8px 0 28px rgba(0, 0, 0, 0.45); }
 /* The name is a click target for editing, so hovering the row must not make
    it look like a link to somewhere else. */
 .task-label:hover { color: var(--text); }
-
-/* ─── SAT Helper ─── */
-.section-subtitle { font-size: 0.92rem; opacity: 0.8; }
-.sat-placeholder { text-align: center; padding: 48px 20px; }
-.sat-placeholder p { color: var(--text-muted); margin-bottom: 20px; }
-
-.cta-sat-button {
-  display: inline-block;
-  padding: 12px 24px;
-  background: var(--accent);
-  color: var(--accent-text);
-  border-radius: 12px;
-  text-decoration: none;
-  font-family: var(--font-display);
-  font-weight: 700;
-  box-shadow: 0 4px 0 0 var(--accent-shadow);
-  transition: all 0.15s ease;
-}
-.cta-sat-button:hover {
-  background: var(--accent-hover);
-  transform: translateY(2px);
-  box-shadow: 0 2px 0 0 var(--accent-shadow);
-}
 
 /* ─── Responsive ─── */
 @media (max-width: 768px) {

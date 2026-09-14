@@ -175,8 +175,7 @@
                 <a href="#" class="nav-link" data-target="page-home">Home</a>
                 <a href="#" class="nav-link" data-target="page-tasks">Tasks</a>
                 <a href="#" class="nav-link" data-target="page-calendar">Calendar</a>
-                <a href="#" class="nav-link" data-target="page-sat">SAT Helper</a>
-                <a href="#" id="logout-btn" class="nav-link">Log Out</a>
+                <a href="https://cainsat.org/dashboard" class="nav-link" target="_blank" rel="noopener">SAT Helper</a>
             </nav>
 
             <!-- Compact Pomodoro Widget -->
@@ -252,6 +251,51 @@
                         </svg>
                     </button>
                     <span>Theme</span>
+                </div>
+
+                <!-- Signed-in account row. Filled in once the session loads. -->
+                <div id="sidebar-user-row" class="sidebar-user-row" hidden>
+                    <img id="sidebar-user-avatar" class="sidebar-user-avatar" src="" alt="" hidden>
+                    <div id="sidebar-user-avatar-fallback" class="sidebar-user-avatar-fallback">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                            <circle cx="12" cy="7" r="4"/>
+                        </svg>
+                    </div>
+                    <span id="sidebar-user-name" class="sidebar-user-name"></span>
+                </div>
+
+                <button type="button" id="sidebar-signout-btn" class="sidebar-account-btn">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                        <polyline points="16 17 21 12 16 7"/>
+                        <line x1="21" y1="12" x2="9" y2="12"/>
+                    </svg>
+                    Sign out
+                </button>
+
+                <button type="button" id="sidebar-delete-btn" class="sidebar-account-btn sidebar-account-btn--danger">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="3 6 5 6 21 6"/>
+                        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                        <path d="M10 11v6"/><path d="M14 11v6"/>
+                        <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/>
+                    </svg>
+                    Delete my account
+                </button>
+
+                <div id="sidebar-delete-confirm" class="sidebar-delete-confirm" hidden>
+                    <p>This permanently deletes your account and everything in it. Type DELETE to confirm.</p>
+                    <input type="text" id="sidebar-delete-input" placeholder="DELETE" autocomplete="off">
+                    <div class="sidebar-delete-actions">
+                        <button type="button" id="sidebar-delete-confirm-btn" disabled>Confirm delete</button>
+                        <button type="button" id="sidebar-delete-cancel-btn">Cancel</button>
+                    </div>
+                </div>
+
+                <div class="sidebar-legal">
+                    <a href="https://cainsat.org/privacy" target="_blank" rel="noopener">Privacy</a>
+                    <a href="https://cainsat.org/terms" target="_blank" rel="noopener">Terms</a>
                 </div>
             </div>
         </aside>
@@ -338,21 +382,13 @@
                     <!-- Tasks for the selected day will be rendered here -->
                 </div>
             </section>
-
-            <section id="page-sat" class="page">
-                <h2>SAT Helper</h2>
-                <div class="sat-placeholder">
-                    <p>Lessons, practice sets and full timed tests live on the main cain site. You are already signed in there with this same account.</p>
-                    <a class="cta-sat-button" href="https://cainsat.org/dashboard" target="_blank" rel="noopener">Open cain SAT</a>
-                </div>
-            </section>
         </section>
     </div>
 
     <script type="module" src="main.js" defer></script>
 
     <script type="module">
-    import { getSession, loadPlanner, signOutUrl } from './api.js';
+    import { getSession, loadPlanner, signOutUrl, deleteAccount } from './api.js';
 
     /**
      * Fetching starts immediately, but main.js only registers its listener once
@@ -364,12 +400,12 @@
     window.plannerData = null;
     window.plannerUser = null;
 
-    document.getElementById('logout-btn').addEventListener('click', (e) => {
-        e.preventDefault();
+    function doSignOut() {
         // Top-level navigation: NextAuth's sign-out is not reachable by fetch
         // from this origin. It returns here, which then bounces to the login page.
         window.location.href = signOutUrl(location.href);
-    });
+    }
+    document.getElementById('sidebar-signout-btn').addEventListener('click', doSignOut);
 
     // Theme toggle
     document.getElementById('theme-toggle')?.addEventListener('click', () => {
@@ -377,9 +413,59 @@
         try { localStorage.setItem('theme', isDark ? 'dark' : 'light'); } catch(e) {}
     });
 
+    // Delete account, mirroring the confirm-by-typing-DELETE flow on cainsat.org.
+    const deleteBtn = document.getElementById('sidebar-delete-btn');
+    const deletePanel = document.getElementById('sidebar-delete-confirm');
+    const deleteInput = document.getElementById('sidebar-delete-input');
+    const deleteConfirmBtn = document.getElementById('sidebar-delete-confirm-btn');
+    const deleteCancelBtn = document.getElementById('sidebar-delete-cancel-btn');
+
+    deleteBtn.addEventListener('click', () => {
+        deleteBtn.hidden = true;
+        deletePanel.hidden = false;
+        deleteInput.focus();
+    });
+    deleteCancelBtn.addEventListener('click', () => {
+        deletePanel.hidden = true;
+        deleteBtn.hidden = false;
+        deleteInput.value = '';
+        deleteConfirmBtn.disabled = true;
+    });
+    deleteInput.addEventListener('input', () => {
+        deleteConfirmBtn.disabled = deleteInput.value !== 'DELETE';
+    });
+    deleteConfirmBtn.addEventListener('click', async () => {
+        if (deleteInput.value !== 'DELETE') return;
+        deleteConfirmBtn.disabled = true;
+        deleteConfirmBtn.textContent = 'Deleting…';
+        try {
+            await deleteAccount();
+        } finally {
+            doSignOut();
+        }
+    });
+
     function toLogin() {
         try { sessionStorage.setItem('postLoginRedirect', location.href); } catch (e) {}
         window.location.replace('/index.html');
+    }
+
+    function renderUserRow(user) {
+        const row = document.getElementById('sidebar-user-row');
+        const avatar = document.getElementById('sidebar-user-avatar');
+        const fallback = document.getElementById('sidebar-user-avatar-fallback');
+        const name = document.getElementById('sidebar-user-name');
+        if (!row) return;
+        name.textContent = user.name || user.email || 'Account';
+        if (user.image) {
+            avatar.src = user.image;
+            avatar.hidden = false;
+            fallback.hidden = true;
+        } else {
+            avatar.hidden = true;
+            fallback.hidden = false;
+        }
+        row.hidden = false;
     }
 
     try {
@@ -388,6 +474,7 @@
             toLogin();
         } else {
             window.plannerUser = user;
+            renderUserRow(user);
             const data = await loadPlanner();
             window.plannerData = data;
             window.dispatchEvent(new CustomEvent('plannerDataLoaded', { detail: data }));

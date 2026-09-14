@@ -1314,6 +1314,52 @@ document.addEventListener('DOMContentLoaded', () => {
         homeSummaryEl.appendChild(grid);
     }
 
+    /**
+     * Shown for the moment between first paint and the planner data arriving.
+     * Without this, the Home summary briefly says "You are all caught up!" (the
+     * real empty-state message, wrongly true of an empty in-memory array) and
+     * the task list is just blank -- both read as real answers, not as loading.
+     */
+    function renderLoadingSkeletons() {
+        if (homeSummaryEl) {
+            homeSummaryEl.innerHTML = '';
+            const header = document.createElement('div');
+            header.className = 'home-summary-header';
+            const title = document.createElement('h3');
+            title.textContent = 'Task overview';
+            header.appendChild(title);
+            homeSummaryEl.appendChild(header);
+
+            const grid = document.createElement('div');
+            grid.className = 'home-summary-cards';
+            for (let i = 0; i < 4; i++) {
+                const card = document.createElement('div');
+                card.className = 'home-summary-card';
+                card.innerHTML =
+                    '<div class="home-summary-card-header">' +
+                        '<span class="skeleton skeleton-line" style="width:70px;height:11px;"></span>' +
+                        '<span class="skeleton" style="width:26px;height:18px;border-radius:999px;"></span>' +
+                    '</div>' +
+                    '<div class="skeleton skeleton-line" style="width:90%;height:12px;margin-top:12px;"></div>' +
+                    '<div class="skeleton skeleton-line" style="width:60%;height:12px;margin-top:8px;"></div>';
+                grid.appendChild(card);
+            }
+            homeSummaryEl.appendChild(grid);
+        }
+
+        if (taskListEl) {
+            taskListEl.innerHTML = '';
+            for (let i = 0; i < 5; i++) {
+                const li = document.createElement('li');
+                li.className = 'task-item-skeleton';
+                li.innerHTML =
+                    '<span class="skeleton skeleton-checkbox"></span>' +
+                    '<span class="skeleton skeleton-line" style="width:' + (55 + (i % 3) * 12) + '%;"></span>';
+                taskListEl.appendChild(li);
+            }
+        }
+    }
+
     // listen for check toggles inside dayTasks
     if (dayTasksEl) {
         dayTasksEl.addEventListener('change', (e) => {
@@ -2659,8 +2705,14 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // load & initial render
-    renderTasks();
+    // load & initial render. `applyPlannerData` may already have run above
+    // (see the window.plannerData check) if the fetch beat this script here;
+    // only show the skeleton when it genuinely has not arrived yet.
+    if (plannerLoaded) {
+        renderTasks();
+    } else {
+        renderLoadingSkeletons();
+    }
 
     // Render calendar now that tasks are loaded so we can mark days correctly
     renderCalendar();
