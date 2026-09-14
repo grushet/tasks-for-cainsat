@@ -198,6 +198,15 @@ html.dark .nav-link:hover {
   color: var(--text);
 }
 
+.nav-link-label { flex: 1; }
+
+.nav-link-external-icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  opacity: 0.4;
+}
+
 .nav-link.active {
   background: var(--accent);
   color: var(--accent-text);
@@ -282,6 +291,14 @@ html.dark .theme-toggle-btn .icon-moon { display: none; }
 }
 
 .sidebar-user-avatar-fallback svg { width: 15px; height: 15px; }
+
+/* `display: flex` above has the same specificity as the browser's own
+   `[hidden] { display: none }` rule, and an author rule always wins over a
+   UA one regardless of specificity -- so without this, the fallback icon
+   stayed visible even once `hidden` was set on it, showing both icons at
+   once as soon as a real avatar photo loaded. */
+.sidebar-user-avatar[hidden],
+.sidebar-user-avatar-fallback[hidden] { display: none; }
 
 .sidebar-user-name {
   font-size: 0.78rem;
