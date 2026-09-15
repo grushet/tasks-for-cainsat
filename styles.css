@@ -2129,6 +2129,12 @@ html.dark .sync-banner-retry:hover { background: rgba(248, 113, 113, 0.15); }
   z-index: 1000;
 }
 
+/* `display: flex` above beats the UA `[hidden] { display: none }` rule at
+   equal specificity, so setting the overlay's `hidden` property alone
+   doesn't hide it -- see the sidebar-user-avatar note above for the same
+   issue. */
+.onboarding-overlay[hidden] { display: none; }
+
 .onboarding-modal {
   background: var(--bg-card);
   border: 1px solid var(--border);
