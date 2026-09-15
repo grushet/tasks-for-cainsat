@@ -392,6 +392,14 @@
         </section>
     </div>
 
+    <div id="onboarding-overlay" class="onboarding-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+        <div class="onboarding-modal">
+            <h2 id="onboarding-title">Welcome to your planner</h2>
+            <p>This is your space to keep track of homework, assignments, and anything else you need to get done. Add tasks, set due dates, and check them off as you finish. Everything you add here is saved so it's here next time you come back.</p>
+            <button type="button" id="onboarding-dismiss" class="onboarding-modal-btn">Let's go</button>
+        </div>
+    </div>
+
     <script type="module" src="main.js" defer></script>
 
     <script type="module">
@@ -413,6 +421,20 @@
         window.location.href = signOutUrl(location.href);
     }
     document.getElementById('sidebar-signout-btn').addEventListener('click', doSignOut);
+
+    // Onboarding modal, shown once on a student's first visit.
+    (function () {
+        const overlay = document.getElementById('onboarding-overlay');
+        const dismissBtn = document.getElementById('onboarding-dismiss');
+        if (!overlay || !dismissBtn) return;
+        let seen = true;
+        try { seen = localStorage.getItem('onboardingSeen') === 'true'; } catch (e) {}
+        if (!seen) overlay.hidden = false;
+        dismissBtn.addEventListener('click', () => {
+            overlay.hidden = true;
+            try { localStorage.setItem('onboardingSeen', 'true'); } catch (e) {}
+        });
+    })();
 
     // Theme toggle
     document.getElementById('theme-toggle')?.addEventListener('click', () => {

@@ -2116,3 +2116,57 @@ html.dark .sync-banner-retry:hover { background: rgba(248, 113, 113, 0.15); }
   border: 1px solid var(--border);
   color: var(--text);
 }
+
+/* ─── Onboarding modal (first visit only) ─── */
+.onboarding-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 1000;
+}
+
+.onboarding-modal {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-card);
+  padding: 32px 28px;
+  max-width: 400px;
+  width: 100%;
+  text-align: center;
+}
+
+.onboarding-modal h2 {
+  font-family: var(--font-display);
+  font-size: 1.4rem;
+  font-weight: 800;
+  margin-bottom: 12px;
+  color: var(--text);
+}
+
+.onboarding-modal p {
+  font-size: 0.92rem;
+  line-height: 1.6;
+  color: var(--text-muted);
+  margin-bottom: 24px;
+}
+
+.onboarding-modal-btn {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--accent-text);
+  border: none;
+  border-radius: 8px;
+  padding: 11px 28px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.onboarding-modal-btn:hover { background: var(--accent-hover); }
